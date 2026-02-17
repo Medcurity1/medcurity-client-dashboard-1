@@ -121,3 +121,73 @@ When task updates fire, the app fetches the latest task by `task_id` and refresh
 - If multiple tasks have the same `SF ID`, the latest synced task wins.
 - You can change dashboard metrics by editing only `CLICKUP_FIELD_MAP_JSON`.
 - For production, put this behind HTTPS and set `ADMIN_API_KEY`.
+
+## Azure deployment (share with clients)
+
+This project is ready for Azure App Service deployment from GitHub.
+
+### A) Create the web app
+
+1. In Azure Portal, create a **Web App**.
+2. Publish: **Code**
+3. Runtime stack: **Python 3.12** (or latest supported Python 3.x)
+4. Region: pick closest to your users.
+5. Pricing:
+- Azure default domain (`*.azurewebsites.net`) is included.
+- Custom domain usually requires a paid App Service plan tier.
+
+### B) Connect GitHub repo
+
+1. In Web App -> **Deployment Center**
+2. Source: **GitHub**
+3. Repository: `Jackfrost830/medcurity-client-dashboard`
+4. Branch: `main`
+5. Save and deploy
+
+### C) Configure startup command
+
+In Web App -> **Configuration** -> **General settings** -> Startup Command:
+
+```bash
+gunicorn --bind=0.0.0.0 --timeout 120 app:app
+```
+
+### D) Configure environment variables
+
+In Web App -> **Configuration** -> **Application settings**, add:
+
+- `CLICKUP_API_TOKEN`
+- `CLICKUP_LIST_ID`
+- `CLICKUP_SF_ID_FIELD_ID`
+- `CLIENT_LINK_SECRET`
+- `CLICKUP_FIELD_MAP_JSON`
+- `ADMIN_API_KEY`
+- `WEBHOOK_TOKEN`
+- `DATABASE_PATH` = `/home/site/wwwroot/client_status.db`
+
+Then save and restart.
+
+### E) Initial sync and link generation
+
+After deploy, run:
+
+```bash
+curl -X POST https://<your-app>.azurewebsites.net/admin/sync -H "X-API-Key: <ADMIN_API_KEY>"
+```
+
+Then generate client links:
+
+```bash
+curl https://<your-app>.azurewebsites.net/admin/generate-link/<SF_ID> -H "X-API-Key: <ADMIN_API_KEY>"
+```
+
+### F) ClickUp webhook
+
+Set ClickUp webhook URL:
+
+`https://<your-app>.azurewebsites.net/webhook/clickup?token=<WEBHOOK_TOKEN>`
+
+### G) Custom domain
+
+After app works on `azurewebsites.net`, add your domain in:
+Web App -> **Custom domains**.
