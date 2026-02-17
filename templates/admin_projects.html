@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="top">
+        <h1>Admin Dashboard</h1>
+        <p>{{ count }} clients</p>
+      </header>
+
+      <section class="panel">
+        <div class="admin-controls">
+          <input id="projectSearch" class="project-search" type="search" placeholder="Search by client name or SF ID..." oninput="filterProjects()" />
+          <select id="statusFilter" class="project-filter" onchange="filterProjects()">
+            <option value="">All statuses</option>
+            {% for status_name, _ in active_status_counts.items() %}
+              <option value="{{ status_name|lower }}">{{ status_name }}</option>
+            {% endfor %}
+            {% for status_name, _ in completed_status_counts.items() %}
+              {% if status_name not in active_status_counts %}
+                <option value="{{ status_name|lower }}">{{ status_name }}</option>
+              {% endif %}
+            {% endfor %}
+          </select>
+          <a class="project-filter refresh-link" href="/admin/projects?key={{ request.args.get('key', '') }}&refresh=1">Refresh From ClickUp</a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Active Projects ({{ active_count }})</h2>
+        <p class="admin-summary">
+          {% for status_name, status_count in active_status_counts.items() %}
+            <span class="summary-pill">{{ status_name }}: {{ status_count }}</span>
+          {% endfor %}
+        </p>
+        {% if active_groups %}
+          {% for period, projects in active_groups.items() %}
+            <h3 class="admin-period">{{ period }}</h3>
+            <table class="admin-table projectsTable">
+              <thead>
+                <tr>
+                  <th>Client</th>
+                  <th>SF ID</th>
+                  <th>Status</th>
+                  <th>Start Date</th>
+                  <th>Completed Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for project in projects %}
+                  <tr data-status="{{ project.task_status|lower }}" data-section="active">
+                    <td><a href="{{ project.status_url }}">{{ project.task_name }}</a></td>
+                    <td>{{ project.sf_id }}</td>
+                    <td>{{ project.task_status }}</td>
+                    <td>{{ project.start_date_label }}</td>
+                    <td>{{ project.completed_date_label }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endfor %}
+        {% else %}
+          <p class="admin-empty">No active projects.</p>
+        {% endif %}
+      </section>
+
+      <section class="panel">
+        <h2>Completed Projects ({{ completed_count }})</h2>
+        <p class="admin-summary">
+          {% for status_name, status_count in completed_status_counts.items() %}
+            <span class="summary-pill">{{ status_name }}: {{ status_count }}</span>
+          {% endfor %}
+        </p>
+        {% if completed_groups %}
+          {% for period, projects in completed_groups.items() %}
+            <h3 class="admin-period">{{ period }}</h3>
+            <table class="admin-table projectsTable">
+              <thead>
+                <tr>
+                  <th>Client</th>
+                  <th>SF ID</th>
+                  <th>Status</th>
+                  <th>Start Date</th>
+                  <th>Completed Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for project in projects %}
+                  <tr data-status="{{ project.task_status|lower }}" data-section="completed">
+                    <td><a href="{{ project.status_url }}">{{ project.task_name }}</a></td>
+                    <td>{{ project.sf_id }}</td>
+                    <td>{{ project.task_status }}</td>
+                    <td>{{ project.start_date_label }}</td>
+                    <td>{{ project.completed_date_label }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endfor %}
+        {% else %}
+          <p class="admin-empty">No completed projects.</p>
+        {% endif %}
+      </section>
+    </main>
+    <script>
+      function filterProjects() {
+        var input = document.getElementById("projectSearch");
+        var filter = (input.value || "").toLowerCase();
+        var statusFilter = (document.getElementById("statusFilter").value || "").toLowerCase();
+        var rows = document.querySelectorAll(".projectsTable tbody tr");
+        var activeVisible = 0;
+        var completedVisible = 0;
+        rows.forEach(function (row) {
+          var text = (row.textContent || "").toLowerCase();
+          var rowStatus = (row.getAttribute("data-status") || "").toLowerCase();
+          var matchesText = text.indexOf(filter) >= 0;
+          var matchesStatus = !statusFilter || rowStatus === statusFilter;
+          var visible = matchesText && matchesStatus;
+          row.style.display = visible ? "" : "none";
+          if (visible) {
+            if (row.getAttribute("data-section") === "active") {
+              activeVisible += 1;
+            } else if (row.getAttribute("data-section") === "completed") {
+              completedVisible += 1;
+            }
+          }
+        });
+        var h2s = document.querySelectorAll("h2");
+        h2s.forEach(function (h2) {
+          if (h2.textContent.indexOf("Active Projects") === 0) {
+            h2.textContent = "Active Projects (" + activeVisible + ")";
+          } else if (h2.textContent.indexOf("Completed Projects") === 0) {
+            h2.textContent = "Completed Projects (" + completedVisible + ")";
+          }
+        });
+      }
+    </script>
+  </body>
+</html>

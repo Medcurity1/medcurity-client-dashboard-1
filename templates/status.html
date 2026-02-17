@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Project Status - {{ status.task_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    {% if can_admin_nav %}
+      <aside class="admin-side-menu">
+        <h3>Admin Menu</h3>
+        {% if admin_dashboard_url or request.args.get('key', '') %}
+          <a class="admin-nav-link" href="{{ admin_dashboard_url }}">Back to Admin Dashboard</a>
+        {% endif %}
+        {% if can_edit %}
+          <a class="admin-nav-link" href="{{ client_view_url }}">View as Client</a>
+        {% elif admin_edit_url %}
+          <a class="admin-nav-link" href="{{ admin_edit_url }}">Back to Edit View</a>
+        {% endif %}
+      </aside>
+    {% endif %}
+
+    <main class="page">
+      <header class="top">
+        <h1>{{ status.task_name }}</h1>
+      </header>
+
+      <section class="panel">
+        <h2>Project Details</h2>
+        <div class="detail-grid">
+          {% for label, value in dashboard.project_details.items() %}
+            <article class="detail-item">
+              <p class="label">
+                {% if label in ['ECD', 'ACD', 'Contract Signed'] %}
+                  <span class="label-icon icon-calendar" aria-hidden="true"></span>
+                {% elif label == 'Location' %}
+                  <span class="label-icon icon-location" aria-hidden="true"></span>
+                {% elif label in ['Project Lead', 'Project Support'] %}
+                  <span class="label-icon icon-user" aria-hidden="true"></span>
+                {% elif label == 'Time Zone' %}
+                  <span class="label-icon icon-clock" aria-hidden="true"></span>
+                {% endif %}
+                {{ label }}
+              </p>
+              <p class="value">{{ value or 'Not set' }}</p>
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+
+      {% if dashboard.show_sra %}
+        <article class="panel track">
+          <h2>SRA</h2>
+          {% if dashboard.sra_steps %}
+            <div class="step-grid">
+              {% for step, step_data in dashboard.sra_steps.items() %}
+                {% set step_idx = loop.index0 %}
+                <section class="step-card">
+                  <h3>{{ step }}</h3>
+                  <div class="step-fields">
+                    <div class="step-row two-col">
+                      <p>
+                        <span class="label">Status:</span>
+                        <span class="value status-pill {{ step_data.status_class }}">{{ step_data.status or 'Not set' }}</span>
+                      </p>
+                      <p><span class="label">Owner:</span> <span class="value">{{ step_data.owner or 'Not assigned' }}</span></p>
+                    </div>
+
+                    <div class="step-row two-col">
+                      {% set row_id = 'sra-' ~ step_idx ~ '-ecd' %}
+                      {% if step_data.ecd.editable %}
+                        <form class="date-edit" method="post" action="{{ url_for('update_date', sf_id=status.sf_id, sig=signature, mode=request.args.get('mode', ''), key=request.args.get('key', '')) }}">
+                          <span class="label">ECD:</span>
+                          <input type="hidden" name="metric_key" value="{{ step_data.ecd.metric_key }}" />
+                          <input type="hidden" name="override_key" value="{{ step_data.ecd.override_key }}" />
+                          <div class="date-inline" id="{{ row_id }}">
+                            <span class="date-value-btn" onclick="openDateEditor('{{ row_id }}')">{{ step_data.ecd.value or 'Not set' }}</span>
+                            <span class="date-editor">
+                              <input type="date" name="value" value="{{ step_data.ecd.input_value }}" onchange="submitDateEditor(this)" onkeydown="handleDateKey(event, '{{ row_id }}')" />
+                            </span>
+                          </div>
+                        </form>
+                      {% else %}
+                        <p><span class="label">ECD:</span> <span class="value">{{ step_data.ecd.value or 'Not set' }}</span></p>
+                      {% endif %}
+
+                      {% set row_id = 'sra-' ~ step_idx ~ '-acd' %}
+                      {% if step_data.acd.editable %}
+                        <form class="date-edit" method="post" action="{{ url_for('update_date', sf_id=status.sf_id, sig=signature, mode=request.args.get('mode', ''), key=request.args.get('key', '')) }}">
+                          <span class="label">ACD:</span>
+                          <input type="hidden" name="metric_key" value="{{ step_data.acd.metric_key }}" />
+                          <input type="hidden" name="override_key" value="" />
+                          <div class="date-inline" id="{{ row_id }}">
+                            <span class="date-value-btn" onclick="openDateEditor('{{ row_id }}')">{{ step_data.acd.value or 'Not set' }}</span>
+                            <span class="date-editor">
+                              <input type="date" name="value" value="{{ step_data.acd.input_value }}" onchange="submitDateEditor(this)" onkeydown="handleDateKey(event, '{{ row_id }}')" />
+                            </span>
+                          </div>
+                        </form>
+                      {% else %}
+                        <p><span class="label">ACD:</span> <span class="value">{{ step_data.acd.value or 'Not set' }}</span></p>
+                      {% endif %}
+                    </div>
+
+                    {% for field in step_data.extras %}
+                      <p><span class="label">{{ field.label }}:</span> <span class="value">{{ field.value or 'Not set' }}</span></p>
+                    {% endfor %}
+                  </div>
+                </section>
+              {% endfor %}
+            </div>
+          {% else %}
+            <section class="step-card empty">SRA is enabled, but no SRA fields are mapped yet.</section>
+          {% endif %}
+        </article>
+      {% endif %}
+
+      {% if dashboard.show_nva %}
+        <article class="panel track">
+          <h2>NVA</h2>
+          {% if dashboard.nva_steps %}
+            <div class="step-grid">
+              {% for step, step_data in dashboard.nva_steps.items() %}
+                {% set step_idx = loop.index0 %}
+                <section class="step-card">
+                  <h3>{{ step }}</h3>
+                  <div class="step-fields">
+                    <div class="step-row two-col">
+                      <p>
+                        <span class="label">Status:</span>
+                        <span class="value status-pill {{ step_data.status_class }}">{{ step_data.status or 'Not set' }}</span>
+                      </p>
+                      <p><span class="label">Owner:</span> <span class="value">{{ step_data.owner or 'Not assigned' }}</span></p>
+                    </div>
+
+                    <div class="step-row two-col">
+                      {% set row_id = 'nva-' ~ step_idx ~ '-ecd' %}
+                      {% if step_data.ecd.editable %}
+                        <form class="date-edit" method="post" action="{{ url_for('update_date', sf_id=status.sf_id, sig=signature, mode=request.args.get('mode', ''), key=request.args.get('key', '')) }}">
+                          <span class="label">ECD:</span>
+                          <input type="hidden" name="metric_key" value="{{ step_data.ecd.metric_key }}" />
+                          <input type="hidden" name="override_key" value="{{ step_data.ecd.override_key }}" />
+                          <div class="date-inline" id="{{ row_id }}">
+                            <span class="date-value-btn" onclick="openDateEditor('{{ row_id }}')">{{ step_data.ecd.value or 'Not set' }}</span>
+                            <span class="date-editor">
+                              <input type="date" name="value" value="{{ step_data.ecd.input_value }}" onchange="submitDateEditor(this)" onkeydown="handleDateKey(event, '{{ row_id }}')" />
+                            </span>
+                          </div>
+                        </form>
+                      {% else %}
+                        <p><span class="label">ECD:</span> <span class="value">{{ step_data.ecd.value or 'Not set' }}</span></p>
+                      {% endif %}
+
+                      {% set row_id = 'nva-' ~ step_idx ~ '-acd' %}
+                      {% if step_data.acd.editable %}
+                        <form class="date-edit" method="post" action="{{ url_for('update_date', sf_id=status.sf_id, sig=signature, mode=request.args.get('mode', ''), key=request.args.get('key', '')) }}">
+                          <span class="label">ACD:</span>
+                          <input type="hidden" name="metric_key" value="{{ step_data.acd.metric_key }}" />
+                          <input type="hidden" name="override_key" value="" />
+                          <div class="date-inline" id="{{ row_id }}">
+                            <span class="date-value-btn" onclick="openDateEditor('{{ row_id }}')">{{ step_data.acd.value or 'Not set' }}</span>
+                            <span class="date-editor">
+                              <input type="date" name="value" value="{{ step_data.acd.input_value }}" onchange="submitDateEditor(this)" onkeydown="handleDateKey(event, '{{ row_id }}')" />
+                            </span>
+                          </div>
+                        </form>
+                      {% else %}
+                        <p><span class="label">ACD:</span> <span class="value">{{ step_data.acd.value or 'Not set' }}</span></p>
+                      {% endif %}
+                    </div>
+
+                    {% for field in step_data.extras %}
+                      <p><span class="label">{{ field.label }}:</span> <span class="value">{{ field.value or 'Not set' }}</span></p>
+                    {% endfor %}
+                  </div>
+                </section>
+              {% endfor %}
+            </div>
+          {% else %}
+            <section class="step-card empty">NVA is enabled, but no NVA fields are mapped yet.</section>
+          {% endif %}
+        </article>
+      {% endif %}
+
+      {% if dashboard.extra_metrics %}
+        <section class="panel">
+          <h2>Additional Metrics</h2>
+          <div class="extra-grid">
+            {% for label, value in dashboard.extra_metrics.items() %}
+              <article class="extra-item">
+                <p class="label">{{ label }}</p>
+                <p class="value">{{ value or 'Not set' }}</p>
+              </article>
+            {% endfor %}
+          </div>
+        </section>
+      {% endif %}
+
+      <section class="meta">
+        <p>SF ID: {{ status.sf_id }}</p>
+        <p>Last updated in ClickUp: {{ status.source_updated_at or 'Unknown' }}</p>
+        <p>Last synced to dashboard: {{ status.synced_at }}</p>
+        {% if status.task_url %}
+          <p>
+            <a href="{{ status.task_url }}" target="_blank" rel="noreferrer">Open task in ClickUp</a>
+          </p>
+        {% endif %}
+      </section>
+    </main>
+    <script>
+      function closeAllDateEditors() {
+        document.querySelectorAll(".date-inline.editing").forEach(function (row) {
+          row.classList.remove("editing");
+        });
+      }
+
+      function openDateEditor(rowId) {
+        closeAllDateEditors();
+        var row = document.getElementById(rowId);
+        if (!row) return;
+        row.classList.add("editing");
+        var input = row.querySelector('input[type="date"]');
+        if (input) {
+          input.focus();
+          if (typeof input.showPicker === "function") {
+            input.showPicker();
+          }
+        }
+      }
+
+      function closeDateEditor(rowId) {
+        var row = document.getElementById(rowId);
+        if (!row) return;
+        row.classList.remove("editing");
+      }
+
+      function submitDateEditor(inputEl) {
+        var form = inputEl.closest("form");
+        if (form) form.submit();
+      }
+
+      function handleDateKey(event, rowId) {
+        if (event.key === "Escape") {
+          closeDateEditor(rowId);
+        }
+      }
+
+      document.addEventListener("click", function (event) {
+        if (!event.target.closest(".date-inline")) {
+          closeAllDateEditors();
+        }
+      });
+    </script>
+  </body>
+</html>
