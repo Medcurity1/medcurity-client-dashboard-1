@@ -5,8 +5,7 @@
       "type": "httpTrigger",
       "direction": "in",
       "name": "req",
-      "methods": ["post"],
-      "route": "update-date"
+      "methods": ["post"]
     },
     {
       "type": "http",

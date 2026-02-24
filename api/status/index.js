@@ -3,7 +3,7 @@ const { sign } = require('../shared/utils');
 
 module.exports = async function (context, req) {
   try {
-    const sfId = String(context.bindingData.sfId || '').trim();
+    const sfId = String(req.query.sf_id || req.query.sfId || '').trim();
     const sig = String(req.query.sig || '').trim();
     if (!sfId || sig !== sign(sfId)) {
       context.res = { status: 403, body: { error: 'forbidden' } };

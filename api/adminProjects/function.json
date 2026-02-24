@@ -5,8 +5,7 @@
       "type": "httpTrigger",
       "direction": "in",
       "name": "req",
-      "methods": ["get"],
-      "route": "admin/projects"
+      "methods": ["get"]
     },
     {
       "type": "http",

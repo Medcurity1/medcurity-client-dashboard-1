@@ -7,7 +7,7 @@ module.exports = async function (context, req) {
       return;
     }
 
-    const sfId = String(context.bindingData.sfId || '').trim();
+    const sfId = String(req.query.sf_id || req.query.sfId || '').trim();
     if (!sfId) {
       context.res = { status: 400, body: { error: 'missing_sf_id' } };
       return;
