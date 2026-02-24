@@ -1,3 +1,72 @@
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Admin Metrics</title><link rel='stylesheet' href='/styles.css'></head><body><main><div class='card'><h1>Admin Metrics</h1><p><a id='projectsLink' href='/admin/projects'>Projects</a></p><div class='grid' id='top'></div></div><div class='card'><h2>Quarterly</h2><table class='table' id='tbl'><thead><tr><th>Quarter</th><th>Closures</th><th>Avg Close Days</th></tr></thead><tbody></tbody></table></div></main><script>
-const q=new URLSearchParams(location.search);const key=q.get('key')||'';document.getElementById('projectsLink').href='/admin/projects?key='+encodeURIComponent(key);fetch(`/api/metrics?key=${encodeURIComponent(key)}`).then(r=>r.json()).then(d=>{document.getElementById('top').innerHTML=`<div class='metric'><div class='muted'>Tracked Closures</div><div>${d.total_tracked_closures||0}</div></div><div class='metric'><div class='muted'>Avg Close Days</div><div>${d.avg_close_days||0}</div></div>`;const tb=document.querySelector('#tbl tbody');(d.quarters||[]).forEach(x=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${x.quarter}</td><td>${x.count}</td><td>${x.avg_close_days}</td>`;tb.appendChild(tr);});}).catch(e=>{document.body.innerHTML='<main><div class=card><h2>Load failed</h2><p>'+String(e)+'</p></div></main>'});
-</script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Metrics</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <aside class="admin-side-menu">
+      <h3>Admin Menu</h3>
+      <a class="admin-nav-link" id="projectsLink" href="#">Projects</a>
+      <a class="admin-nav-link" id="metricsLink" href="#">Metrics</a>
+    </aside>
+
+    <main class="page">
+      <header class="top">
+        <h1>Admin Metrics</h1>
+        <p id="countLabel">0 records</p>
+      </header>
+
+      <section class="panel">
+        <div class="admin-controls">
+          <input id="metricSearch" class="project-search" type="search" placeholder="Search by company..." oninput="renderTable()" />
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Core Metrics</h2>
+        <p class="admin-summary" id="summary"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Average Close Days By Quarter</h2>
+        <table class="admin-table" id="quarterTable">
+          <thead><tr><th>Quarter</th><th>Projects</th><th>Avg Close Days</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Closed Record Details</h2>
+        <table class="admin-table" id="detailsTable">
+          <thead><tr><th>Company</th><th>Track</th><th>Quarter</th><th>Close Days</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script>
+      const q=new URLSearchParams(location.search);const key=q.get('key')||'';
+      let rows=[];
+      function esc(v){return String(v||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+      function renderTable(){
+        const query=(document.getElementById('metricSearch').value||'').toLowerCase();
+        const filtered=rows.filter(r=>`${r.company} ${r.track} ${r.quarter}`.toLowerCase().includes(query));
+        document.getElementById('countLabel').textContent=`${filtered.length} records`;
+        document.querySelector('#detailsTable tbody').innerHTML=filtered.map(r=>`<tr><td>${esc(r.company)}</td><td>${esc(r.track)}</td><td>${esc(r.quarter)}</td><td>${esc(r.days)}</td></tr>`).join('')||'<tr><td colspan="4">No records</td></tr>';
+      }
+      async function load(){
+        document.getElementById('projectsLink').href=`/admin/projects?key=${encodeURIComponent(key)}`;
+        document.getElementById('metricsLink').href=`/admin/metrics?key=${encodeURIComponent(key)}`;
+        const res=await fetch(`/api/metrics?key=${encodeURIComponent(key)}`); const d=await res.json();
+        rows=d.rows||[];
+        document.getElementById('summary').innerHTML=`<span class="summary-pill">Tracked Closures: ${d.total_tracked_closures||0}</span><span class="summary-pill">Overall Avg Close Days: ${d.avg_close_days||0}</span>`;
+        document.querySelector('#quarterTable tbody').innerHTML=(d.quarters||[]).map(r=>`<tr><td>${esc(r.quarter)}</td><td>${esc(r.count)}</td><td>${esc(r.avg_close_days)}</td></tr>`).join('')||'<tr><td colspan="3">No quarter data</td></tr>';
+        renderTable();
+      }
+      load().catch(err=>{document.body.innerHTML=`<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(err.message||err)}</p></section></main>`;});
+    </script>
+  </body>
+</html>

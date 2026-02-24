@@ -1,3 +1,140 @@
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Admin Projects</title><link rel='stylesheet' href='/styles.css'></head><body><main><div class='card'><h1>Admin Dashboard</h1><p><a id='metricsLink' href='/admin/metrics'>Metrics</a></p><table class='table' id='tbl'><thead><tr><th>Client</th><th>SF ID</th><th>Status</th><th>Updated</th></tr></thead><tbody></tbody></table></div></main><script>
-const params=new URLSearchParams(location.search);const key=params.get('key')||'';document.getElementById('metricsLink').href='/admin/metrics?key='+encodeURIComponent(key);fetch(`/api/projects?key=${encodeURIComponent(key)}`).then(r=>r.json()).then(data=>{const tb=document.querySelector('#tbl tbody');(data.projects||[]).forEach(p=>{const tr=document.createElement('tr');const href=`/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}&key=${encodeURIComponent(key)}&mode=admin`;tr.innerHTML=`<td><a href="${href}">${p.task_name||'Untitled'}</a></td><td>${p.sf_id}</td><td><span class='pill'>${p.task_status||''}</span></td><td>${p.source_updated_at||''}</td>`;tb.appendChild(tr);});}).catch(e=>{document.body.innerHTML='<main><div class=card><h2>Load failed</h2><p>'+String(e)+'</p></div></main>'});
-</script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <aside class="admin-side-menu">
+      <h3>Admin Menu</h3>
+      <a class="admin-nav-link" id="projectsLink" href="#">Projects</a>
+      <a class="admin-nav-link" id="metricsLink" href="#">Metrics</a>
+    </aside>
+
+    <main class="page">
+      <header class="top">
+        <h1>Admin Dashboard</h1>
+        <p id="countLabel">0 clients</p>
+      </header>
+
+      <section class="panel">
+        <div class="admin-controls">
+          <input id="projectSearch" class="project-search" type="search" placeholder="Search by client name or SF ID..." oninput="renderTables()" />
+          <div class="status-multiselect" id="statusFilterControl">
+            <button type="button" id="statusFilterToggle" class="project-filter status-toggle" onclick="togglePanel('statusFilterPanel')">All statuses</button>
+            <div id="statusFilterPanel" class="status-filter-panel" hidden>
+              <div id="statusFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearGroup('statusFilter')">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('statusFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
+          <div class="status-multiselect" id="leadFilterControl">
+            <button type="button" id="leadFilterToggle" class="project-filter status-toggle" onclick="togglePanel('leadFilterPanel')">All project leads</button>
+            <div id="leadFilterPanel" class="status-filter-panel" hidden>
+              <div id="leadFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearGroup('leadFilter')">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('leadFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
+          <a class="project-filter refresh-link" id="refreshLink" href="#">Refresh From ClickUp</a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2 id="activeHeader">Active Projects (0)</h2>
+        <div id="activeGroups"></div>
+      </section>
+
+      <section class="panel">
+        <h2 id="completedHeader">Completed Projects (0)</h2>
+        <div id="completedGroups"></div>
+      </section>
+    </main>
+
+    <script>
+      const q = new URLSearchParams(location.search);
+      const key = q.get('key') || '';
+      const FILTER_KEY = 'medcurity_admin_filters_v2';
+      let projects = [];
+
+      function esc(v){return String(v||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+      function norm(v){return String(v||'').trim().toLowerCase();}
+      function parseUS(s){const m=String(s||'').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);if(!m)return null;return new Date(+m[3],+m[1]-1,+m[2]);}
+      function quarterLabel(d){if(!d)return 'No Date';const q=Math.floor(d.getMonth()/3)+1;return `${d.getFullYear()} Q${q}`;}
+
+      function selected(groupId){return Array.from(document.querySelectorAll(`#${groupId} input:checked`)).map(x=>norm(x.value));}
+      function saveFilters(){localStorage.setItem(FILTER_KEY,JSON.stringify({search:document.getElementById('projectSearch').value||'',statuses:selected('statusFilter'),leads:selected('leadFilter')}));}
+      function loadFilters(){try{const s=JSON.parse(localStorage.getItem(FILTER_KEY)||'{}');if(s.search)document.getElementById('projectSearch').value=s.search;return s;}catch{return {}}}
+      function togglePanel(id){const p=document.getElementById(id);p.hidden=!p.hidden;}
+      function closePanel(id){document.getElementById(id).hidden=true;}
+      function clearGroup(id){document.querySelectorAll(`#${id} input`).forEach(x=>x.checked=false);renderTables();}
+
+      function buildFilterOptions(id, values){
+        const host=document.getElementById(id);
+        host.innerHTML=values.map(v=>`<label class="status-filter-option"><input type="checkbox" value="${esc(v)}" onchange="renderTables()"><span>${esc(v)}</span></label>`).join('');
+      }
+
+      function renderGroup(hostId, rows){
+        const host=document.getElementById(hostId);
+        const grouped={};
+        rows.forEach(r=>{const dt=parseUS(r.task_closed_at||r.task_created_at);const key=quarterLabel(dt);(grouped[key]=grouped[key]||[]).push(r);});
+        const keys=Object.keys(grouped).sort();
+        host.innerHTML=keys.map(k=>`<h3 class="admin-period">${esc(k)}</h3><table class="admin-table projectsTable"><thead><tr><th>Client</th><th>SF ID</th><th>Project Lead</th><th>Status</th><th>Start Date</th><th>Completed Date</th></tr></thead><tbody>${grouped[k].map(p=>`<tr><td><a href="/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}&key=${encodeURIComponent(key)}&mode=admin">${esc(p.task_name)}</a></td><td>${esc(p.sf_id)}</td><td>${esc(p.project_lead||'Not assigned')}</td><td>${esc(p.task_status||'')}</td><td>${esc(p.task_created_at||'-')}</td><td>${esc(p.task_closed_at||'-')}</td></tr>`).join('')}</tbody></table>`).join('') || '<p class="admin-empty">No projects.</p>';
+      }
+
+      function renderTables(){
+        const query=norm(document.getElementById('projectSearch').value);
+        const statusSel=selected('statusFilter');
+        const leadSel=selected('leadFilter');
+        const filtered=projects.filter(p=>{
+          const text=norm(`${p.task_name} ${p.sf_id}`);
+          if(query && !text.includes(query)) return false;
+          if(statusSel.length && !statusSel.includes(norm(p.task_status))) return false;
+          if(leadSel.length && !leadSel.includes(norm(p.project_lead))) return false;
+          return true;
+        });
+
+        const active=filtered.filter(p=>norm(p.task_status)!=='completed');
+        const completed=filtered.filter(p=>norm(p.task_status)==='completed');
+        document.getElementById('activeHeader').textContent=`Active Projects (${active.length})`;
+        document.getElementById('completedHeader').textContent=`Completed Projects (${completed.length})`;
+        renderGroup('activeGroups', active);
+        renderGroup('completedGroups', completed);
+
+        document.getElementById('statusFilterToggle').textContent=statusSel.length?`${statusSel.length} selected`:'All statuses';
+        document.getElementById('leadFilterToggle').textContent=leadSel.length?`${leadSel.length} selected`:'All project leads';
+        saveFilters();
+      }
+
+      async function load(){
+        document.getElementById('projectsLink').href=`/admin/projects?key=${encodeURIComponent(key)}`;
+        document.getElementById('metricsLink').href=`/admin/metrics?key=${encodeURIComponent(key)}`;
+        document.getElementById('refreshLink').href=`/admin/projects?key=${encodeURIComponent(key)}`;
+        const res=await fetch(`/api/projects?key=${encodeURIComponent(key)}`);
+        const data=await res.json();
+        projects=data.projects||[];
+        document.getElementById('countLabel').textContent=`${projects.length} clients`;
+        const statuses=[...new Set(projects.map(p=>p.task_status).filter(Boolean))].sort();
+        const leads=[...new Set(projects.map(p=>p.project_lead).filter(Boolean))].sort();
+        buildFilterOptions('statusFilter', statuses);
+        buildFilterOptions('leadFilter', leads);
+        const saved=loadFilters();
+        if(saved.statuses) document.querySelectorAll('#statusFilter input').forEach(x=>x.checked=saved.statuses.includes(norm(x.value)));
+        if(saved.leads) document.querySelectorAll('#leadFilter input').forEach(x=>x.checked=saved.leads.includes(norm(x.value)));
+        renderTables();
+      }
+
+      document.addEventListener('click',(e)=>{
+        ['statusFilterControl','leadFilterControl'].forEach(id=>{const c=document.getElementById(id);if(c && !c.contains(e.target)){const p=c.querySelector('.status-filter-panel');if(p)p.hidden=true;}});
+      });
+
+      load().catch(err=>{document.body.innerHTML=`<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(err.message||err)}</p></section></main>`;});
+    </script>
+  </body>
+</html>

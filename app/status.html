@@ -1,3 +1,127 @@
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Client Status</title><link rel='stylesheet' href='/styles.css'></head><body><main><div class='card'><h1 id='name'>Client Status</h1><p id='meta' class='muted'></p><div id='details' class='grid'></div></div><div class='card'><h2>Metrics</h2><table class='table' id='tbl'><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody></tbody></table></div></main><script>
-const q=new URLSearchParams(location.search);const sf=q.get('sf_id')||'';const sig=q.get('sig')||'';if(!sf||!sig){document.body.innerHTML='<main><div class=card><h2>Missing sf_id or sig.</h2></div></main>';}else{fetch(`/api/status?sf_id=${encodeURIComponent(sf)}&sig=${encodeURIComponent(sig)}`).then(r=>r.json()).then(d=>{document.getElementById('name').textContent=d.task_name||'Client Dashboard';document.getElementById('meta').textContent=`SF ID: ${d.sf_id} | Status: ${d.task_status} | Updated: ${d.source_updated_at||''}`;const det=document.getElementById('details');[['Project Lead',d.metrics?.['project.project_lead']||'Not assigned'],['Project Support',d.metrics?.['project.project_support']||'Not assigned'],['Location',d.metrics?.['project.remote_onsite']||'Not set']].forEach(([k,v])=>{const el=document.createElement('div');el.className='metric';el.innerHTML=`<div class='muted'>${k}</div><div>${v||'Not set'}</div>`;det.appendChild(el);});const tb=document.querySelector('#tbl tbody');Object.entries(d.metrics||{}).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([k,v])=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${k}</td><td>${v||''}</td>`;tb.appendChild(tr);});}).catch(e=>{document.body.innerHTML='<main><div class=card><h2>Load failed</h2><p>'+String(e)+'</p></div></main>'});}
-</script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Project Status</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <aside class="admin-side-menu" id="adminMenu" style="display:none;">
+      <h3>Admin Menu</h3>
+      <a class="admin-nav-link" id="backAdmin" href="#">Back to Admin Dashboard</a>
+    </aside>
+
+    <main class="page">
+      <header class="top">
+        <h1 id="title">Project Status</h1>
+      </header>
+
+      <section class="panel">
+        <h2>Project Details</h2>
+        <div class="detail-grid" id="projectDetails"></div>
+      </section>
+
+      <article class="panel track" id="sraPanel" style="display:none;">
+        <h2>SRA</h2>
+        <div class="step-grid" id="sraSteps"></div>
+      </article>
+
+      <article class="panel track" id="nvaPanel" style="display:none;">
+        <h2>NVA</h2>
+        <div class="step-grid" id="nvaSteps"></div>
+      </article>
+
+      <section class="meta" id="meta"></section>
+    </main>
+
+    <script>
+      const q = new URLSearchParams(location.search);
+      const sf = q.get('sf_id') || '';
+      const sig = q.get('sig') || '';
+      const key = q.get('key') || '';
+      const mode = (q.get('mode') || '').toLowerCase();
+
+      function esc(value) {
+        return String(value || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+      }
+
+      function detailIcon(label) {
+        if (['ECD', 'ACD', 'Contract Signed'].includes(label)) return '<span class="label-icon icon-calendar" aria-hidden="true"></span>';
+        if (label === 'Location') return '<span class="label-icon icon-location" aria-hidden="true"></span>';
+        if (['Project Lead', 'Project Support'].includes(label)) return '<span class="label-icon icon-user" aria-hidden="true"></span>';
+        if (label === 'Time Zone') return '<span class="label-icon icon-clock" aria-hidden="true"></span>';
+        return '';
+      }
+
+      function renderStep(stepName, data) {
+        const extras = (data.extras || []).map((x) => `<p><span class="label">${esc(x.label)}:</span> <span class="value">${esc(x.value || 'Not set')}</span></p>`).join('');
+        return `
+          <section class="step-card">
+            <h3>${esc(stepName)}</h3>
+            <div class="step-fields">
+              <div class="step-row two-col">
+                <p><span class="label">Status:</span> <span class="value status-pill ${esc(data.status_class || 'status-pill-neutral')}">${esc(data.status || 'Not set')}</span></p>
+                <p><span class="label">Owner:</span> <span class="value">${esc(data.Owner || data.owner || 'Not assigned')}</span></p>
+              </div>
+              <div class="step-row two-col">
+                <p><span class="label">ECD:</span> <span class="value">${esc((data.ECD || data.ecd?.value || 'Not set'))}</span></p>
+                <p><span class="label">ACD:</span> <span class="value">${esc((data.ACD || data.acd?.value || 'Not set'))}</span></p>
+              </div>
+              ${extras}
+            </div>
+          </section>`;
+      }
+
+      async function load() {
+        if (!sf || !sig) {
+          document.body.innerHTML = '<main class="page"><section class="panel"><h2>Missing sf_id or sig.</h2></section></main>';
+          return;
+        }
+
+        const res = await fetch(`/api/status?sf_id=${encodeURIComponent(sf)}&sig=${encodeURIComponent(sig)}`);
+        const data = await res.json();
+        if (!res.ok) {
+          document.body.innerHTML = `<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(data.detail || data.error || res.status)}</p></section></main>`;
+          return;
+        }
+
+        document.getElementById('title').textContent = data.task_name || 'Project Status';
+
+        if (mode === 'admin') {
+          const menu = document.getElementById('adminMenu');
+          menu.style.display = '';
+          document.getElementById('backAdmin').href = `/admin/projects?key=${encodeURIComponent(key)}`;
+        }
+
+        const dashboard = data.dashboard || {};
+        const pd = dashboard.project_details || {};
+        document.getElementById('projectDetails').innerHTML = Object.entries(pd)
+          .map(([label, value]) => `<article class="detail-item"><p class="label">${detailIcon(label)}${esc(label)}</p><p class="value">${esc(value || 'Not set')}</p></article>`)
+          .join('');
+
+        const sra = dashboard.sra_steps || {};
+        const nva = dashboard.nva_steps || {};
+
+        if (dashboard.show_sra && Object.keys(sra).length) {
+          document.getElementById('sraPanel').style.display = '';
+          document.getElementById('sraSteps').innerHTML = Object.entries(sra).map(([k, v]) => renderStep(k, v)).join('');
+        }
+
+        if (dashboard.show_nva && Object.keys(nva).length) {
+          document.getElementById('nvaPanel').style.display = '';
+          document.getElementById('nvaSteps').innerHTML = Object.entries(nva).map(([k, v]) => renderStep(k, v)).join('');
+        }
+
+        document.getElementById('meta').innerHTML = `
+          <p>SF ID: ${esc(data.sf_id)}</p>
+          <p>Last updated in ClickUp: ${esc(data.source_updated_at || 'Unknown')}</p>
+          <p><a href="${esc(data.task_url || '#')}" target="_blank" rel="noreferrer">Open task in ClickUp</a></p>`;
+      }
+
+      load().catch((err) => {
+        document.body.innerHTML = `<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(err && err.message ? err.message : err)}</p></section></main>`;
+      });
+    </script>
+  </body>
+</html>
