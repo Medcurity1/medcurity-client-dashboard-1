@@ -39,10 +39,10 @@ app.http('status', {
   },
 });
 
-app.http('adminProjects', {
+app.http('projects', {
   methods: ['GET'],
   authLevel: 'anonymous',
-  route: 'adminProjects',
+  route: 'projects',
   handler: async (req, ctx) => {
     try {
       if (!isAdmin({ query: Object.fromEntries(req.query.entries()), headers: req.headers })) {
@@ -64,10 +64,10 @@ app.http('adminProjects', {
   },
 });
 
-app.http('adminMetrics', {
+app.http('metrics', {
   methods: ['GET'],
   authLevel: 'anonymous',
-  route: 'adminMetrics',
+  route: 'metrics',
   handler: async (req, ctx) => {
     try {
       if (!isAdmin({ query: Object.fromEntries(req.query.entries()), headers: req.headers })) {
@@ -132,10 +132,10 @@ app.http('generateLink', {
   },
 });
 
-app.http('updateDate', {
+app.http('update', {
   methods: ['POST'],
   authLevel: 'anonymous',
-  route: 'updateDate',
+  route: 'update',
   handler: async (req, ctx) => {
     try {
       const queryObj = Object.fromEntries(req.query.entries());
