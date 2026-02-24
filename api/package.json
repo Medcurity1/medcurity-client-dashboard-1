@@ -3,5 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "description": "Azure Functions API for Medcurity client dashboard static web app",
-  "engines": { "node": ">=18" }
+  "main": "src/functions.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0"
+  }
 }
