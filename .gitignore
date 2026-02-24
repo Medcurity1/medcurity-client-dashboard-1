@@ -1,4 +1,4 @@
 .env
-__pycache__/
-*.pyc
-*.db
+.vercel/
+node_modules/
+.DS_Store

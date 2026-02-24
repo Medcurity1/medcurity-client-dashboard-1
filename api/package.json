@@ -1,0 +1,7 @@
+{
+  "name": "medcurity-client-dashboard-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Azure Functions API for Medcurity client dashboard static web app",
+  "engines": { "node": ">=18" }
+}
