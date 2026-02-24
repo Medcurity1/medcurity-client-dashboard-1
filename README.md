@@ -21,3 +21,5 @@ This version is rewritten for Azure Static Web Apps:
 - App location: `app`
 - Api location: `api`
 - Output location: *(leave blank)*
+
+Redeploy trigger: 2026-02-24T23:00:33Z
