@@ -91,11 +91,18 @@
                           <span class="label">ACD:</span>
                           <input type="hidden" name="metric_key" value="{{ step_data.acd.metric_key }}" />
                           <input type="hidden" name="override_key" value="" />
+                          <input type="hidden" name="step_slug" value="{{ step_data.step_slug }}" />
+                          <input type="hidden" name="adjust_following" value="yes" />
                           <div class="date-inline" id="{{ row_id }}">
                             <span class="date-value-btn" onclick="openDateEditor('{{ row_id }}')">{{ step_data.acd.value or 'Not set' }}</span>
                             <span class="date-editor">
                               <input type="date" name="value" value="{{ step_data.acd.input_value }}" onchange="submitDateEditor(this)" onkeydown="handleDateKey(event, '{{ row_id }}')" />
                             </span>
+                          </div>
+                          <div class="acd-choice">
+                            <span class="acd-choice-label">Apply this date to following timeline?</span>
+                            <button type="button" onclick="submitAcdChoice(this, true)">Adjust following ECDs</button>
+                            <button type="button" class="ghost" onclick="submitAcdChoice(this, false)">Keep following ECDs</button>
                           </div>
                         </form>
                       {% else %}
@@ -158,11 +165,18 @@
                           <span class="label">ACD:</span>
                           <input type="hidden" name="metric_key" value="{{ step_data.acd.metric_key }}" />
                           <input type="hidden" name="override_key" value="" />
+                          <input type="hidden" name="step_slug" value="{{ step_data.step_slug }}" />
+                          <input type="hidden" name="adjust_following" value="yes" />
                           <div class="date-inline" id="{{ row_id }}">
                             <span class="date-value-btn" onclick="openDateEditor('{{ row_id }}')">{{ step_data.acd.value or 'Not set' }}</span>
                             <span class="date-editor">
                               <input type="date" name="value" value="{{ step_data.acd.input_value }}" onchange="submitDateEditor(this)" onkeydown="handleDateKey(event, '{{ row_id }}')" />
                             </span>
+                          </div>
+                          <div class="acd-choice">
+                            <span class="acd-choice-label">Apply this date to following timeline?</span>
+                            <button type="button" onclick="submitAcdChoice(this, true)">Adjust following ECDs</button>
+                            <button type="button" class="ghost" onclick="submitAcdChoice(this, false)">Keep following ECDs</button>
                           </div>
                         </form>
                       {% else %}
@@ -215,6 +229,12 @@
         });
       }
 
+      function closeAllAcdChoices() {
+        document.querySelectorAll(".acd-choice.show").forEach(function (choice) {
+          choice.classList.remove("show");
+        });
+      }
+
       function openDateEditor(rowId) {
         closeAllDateEditors();
         var row = document.getElementById(rowId);
@@ -237,18 +257,41 @@
 
       function submitDateEditor(inputEl) {
         var form = inputEl.closest("form");
-        if (form) form.submit();
+        if (!form) return;
+
+        var stepSlugInput = form.querySelector('input[name="step_slug"]');
+        if (stepSlugInput && stepSlugInput.value) {
+          closeAllAcdChoices();
+          var choice = form.querySelector(".acd-choice");
+          if (choice) {
+            choice.classList.add("show");
+            return;
+          }
+        }
+        form.submit();
+      }
+
+      function submitAcdChoice(buttonEl, shouldAdjust) {
+        var form = buttonEl.closest("form");
+        if (!form) return;
+        var adjustInput = form.querySelector('input[name="adjust_following"]');
+        if (adjustInput) {
+          adjustInput.value = shouldAdjust ? "yes" : "no";
+        }
+        form.submit();
       }
 
       function handleDateKey(event, rowId) {
         if (event.key === "Escape") {
           closeDateEditor(rowId);
+          closeAllAcdChoices();
         }
       }
 
       document.addEventListener("click", function (event) {
-        if (!event.target.closest(".date-inline")) {
+        if (!event.target.closest(".date-inline") && !event.target.closest(".acd-choice")) {
           closeAllDateEditors();
+          closeAllAcdChoices();
         }
       });
     </script>

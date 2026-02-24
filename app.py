@@ -1,6 +1,10 @@
 import hashlib
 import hmac
-from datetime import date, datetime, timedelta
+import io
+import re
+from collections import defaultdict
+import csv
+from datetime import date, datetime, timedelta, timezone
 
 from flask import Flask, abort, jsonify, redirect, render_template, request, url_for
 
@@ -24,10 +28,15 @@ from config import (
 )
 from storage import (
     get_client_status,
+    get_acd_anchor_preferences,
     get_ecd_overrides,
     init_db,
+    latest_source_updated_at,
+    list_historical_close_metrics,
     list_client_statuses,
     log_edit,
+    upsert_historical_close_metrics,
+    upsert_acd_anchor_preference,
     upsert_ecd_override,
     upsert_client_status,
     upsert_many_client_statuses,
@@ -57,6 +66,8 @@ NVA_ECD_OFFSETS_DAYS = {
     "schedule_final_nva_report": 42,
     "present_final_nva_report": 49,
 }
+
+TRACKED_MAX_CLOSE_DAYS = 120
 
 
 def to_title_case(raw: str) -> str:
@@ -256,6 +267,344 @@ def parse_metric_us_date(value: str) -> datetime:
     return parsed if parsed else datetime.min
 
 
+DATE_TOKEN_RE = re.compile(r"(\d{1,2}/\d{1,2}/\d{2,4})")
+
+
+def parse_any_us_date(value: str) -> datetime | None:
+    text = str(value).strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered in {"na", "n/a", "tbc", "not applicable", "none", "not set"}:
+        return None
+    direct = parse_us_date(text)
+    if direct:
+        return direct
+    match = DATE_TOKEN_RE.search(text)
+    if not match:
+        return None
+    token = match.group(1)
+    for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(token, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def business_days_between(start_dt: datetime | None, end_dt: datetime | None) -> int | None:
+    if not start_dt or not end_dt:
+        return None
+    start = start_dt.date()
+    end = end_dt.date()
+    if end < start:
+        return None
+    count = 0
+    current = start
+    while current <= end:
+        if current.weekday() < 5:
+            count += 1
+        current = current + timedelta(days=1)
+    return count
+
+
+def quarter_label_for_date(dt: datetime) -> str:
+    q = ((dt.month - 1) // 3) + 1
+    return f"{dt.year} Q{q}"
+
+
+def metric_first_date(metrics: dict, keys: list[str]) -> datetime | None:
+    for key in keys:
+        dt = parse_any_us_date(metrics.get(key, ""))
+        if dt:
+            return dt
+    return None
+
+
+def live_close_metric_rows(rows: list[dict]) -> tuple[list[dict], dict]:
+    result: list[dict] = []
+    completed_task_total = 0
+    completed_task_with_valid_close = 0
+    missing_sra_dates = 0
+    missing_nva_dates = 0
+    missing_company_names: set[str] = set()
+    missing_records: list[dict[str, str]] = []
+    for row in rows:
+        status_clean = str(row.get("task_status", "")).strip().lower()
+        if status_clean != "completed":
+            continue
+        completed_task_total += 1
+        metrics = row.get("metrics", {}) or {}
+        has_any_valid_for_task = False
+
+        sra_kickoff = metric_first_date(metrics, ["sra.sra_kickoff.date", "sra.sra_kickoff.acd"])
+        sra_final = metric_first_date(
+            metrics,
+            ["sra.present_final_sra_report.date", "sra.present_final_sra_report.acd"],
+        )
+        sra_days = business_days_between(sra_kickoff, sra_final)
+        sra_enabled = parse_bool(
+            metrics.get("project.sra_enabled")
+            or metrics.get("sra.enabled")
+            or metrics.get("sra_enabled")
+        )
+        sra_relevant = sra_enabled is True or any(str(k).startswith("sra.") for k in metrics.keys())
+        if sra_days:
+            has_any_valid_for_task = True
+            result.append(
+                {
+                    "company": row.get("task_name", ""),
+                    "track": "SRA",
+                    "kickoff_date": format_us_date(sra_kickoff),
+                    "final_date": format_us_date(sra_final),
+                    "close_days": sra_days,
+                    "quarter_label": quarter_label_for_date(sra_final),
+                    "source": "clickup_live",
+                }
+            )
+        elif sra_relevant:
+            missing_sra_dates += 1
+
+        nva_kickoff = metric_first_date(metrics, ["nva.nva_kickoff.date", "nva.nva_kickoff.acd"])
+        nva_final = metric_first_date(
+            metrics,
+            ["nva.present_final_nva_report.date", "nva.present_final_nva_report.acd"],
+        )
+        nva_days = business_days_between(nva_kickoff, nva_final)
+        nva_enabled = parse_bool(
+            metrics.get("project.nva_enabled")
+            or metrics.get("nva.enabled")
+            or metrics.get("nva_enabled")
+        )
+        nva_relevant = nva_enabled is True or any(str(k).startswith("nva.") for k in metrics.keys())
+        if nva_days:
+            has_any_valid_for_task = True
+            result.append(
+                {
+                    "company": row.get("task_name", ""),
+                    "track": "NVA",
+                    "kickoff_date": format_us_date(nva_kickoff),
+                    "final_date": format_us_date(nva_final),
+                    "close_days": nva_days,
+                    "quarter_label": quarter_label_for_date(nva_final),
+                    "source": "clickup_live",
+                }
+            )
+        elif nva_relevant:
+            missing_nva_dates += 1
+
+        if has_any_valid_for_task:
+            completed_task_with_valid_close += 1
+        else:
+            company = str(row.get("task_name", "")).strip()
+            sf_id = str(row.get("sf_id", "")).strip()
+            if company:
+                missing_company_names.add(company)
+            missing_records.append({"company": company, "sf_id": sf_id})
+
+    quality = {
+        "completed_task_total": completed_task_total,
+        "completed_task_with_valid_close": completed_task_with_valid_close,
+        "completed_task_missing_close_dates": max(
+            completed_task_total - completed_task_with_valid_close,
+            0,
+        ),
+        "missing_sra_dates": missing_sra_dates,
+        "missing_nva_dates": missing_nva_dates,
+        "missing_companies": sorted(missing_company_names),
+        "missing_records": missing_records,
+    }
+    return result, quality
+
+
+def summarize_metrics_rows(rows: list[dict]) -> tuple[list[dict], dict]:
+    grouped: dict[str, list[int]] = defaultdict(list)
+    grouped_sra: dict[str, list[int]] = defaultdict(list)
+    grouped_nva: dict[str, list[int]] = defaultdict(list)
+    all_days: list[int] = []
+    sra_days: list[int] = []
+    nva_days: list[int] = []
+    tracked_days: list[int] = []
+
+    for row in rows:
+        d = int(row["close_days"])
+        q = row["quarter_label"]
+        t = str(row.get("track", "")).upper()
+        grouped[q].append(d)
+        all_days.append(d)
+        if t == "SRA":
+            grouped_sra[q].append(d)
+            sra_days.append(d)
+        elif t == "NVA":
+            grouped_nva[q].append(d)
+            nva_days.append(d)
+        if d <= TRACKED_MAX_CLOSE_DAYS:
+            tracked_days.append(d)
+
+    def quarter_sort_key(label: str) -> tuple[int, int]:
+        parts = label.split()
+        if len(parts) != 2:
+            return (0, 0)
+        year = int(parts[0])
+        quarter = int(parts[1].replace("Q", ""))
+        return (year, quarter)
+
+    quarter_rows: list[dict] = []
+    for quarter in sorted(grouped.keys(), key=quarter_sort_key):
+        all_vals = grouped[quarter]
+        sra_vals = grouped_sra.get(quarter, [])
+        nva_vals = grouped_nva.get(quarter, [])
+        quarter_rows.append(
+            {
+                "quarter_label": quarter,
+                "project_count": len(all_vals),
+                "avg_close_days": round(sum(all_vals) / len(all_vals), 1),
+                "sra_count": len(sra_vals),
+                "avg_sra_days": round(sum(sra_vals) / len(sra_vals), 1) if sra_vals else None,
+                "nva_count": len(nva_vals),
+                "avg_nva_days": round(sum(nva_vals) / len(nva_vals), 1) if nva_vals else None,
+            }
+        )
+
+    summary = {
+        "overall_avg_days": round(sum(all_days) / len(all_days), 1) if all_days else None,
+        "overall_count": len(all_days),
+        "overall_sra_avg_days": round(sum(sra_days) / len(sra_days), 1) if sra_days else None,
+        "overall_sra_count": len(sra_days),
+        "overall_nva_avg_days": round(sum(nva_days) / len(nva_days), 1) if nva_days else None,
+        "overall_nva_count": len(nva_days),
+        "overall_median_days": (
+            sorted(all_days)[len(all_days) // 2] if all_days else None
+        ),
+        "overall_p90_days": (
+            sorted(all_days)[max((len(all_days) * 9) // 10 - 1, 0)] if all_days else None
+        ),
+        "tracked_avg_days": (
+            round(sum(tracked_days) / len(tracked_days), 1) if tracked_days else None
+        ),
+        "tracked_count": len(tracked_days),
+        "untracked_outlier_count": max(len(all_days) - len(tracked_days), 0),
+        "tracked_max_days": TRACKED_MAX_CLOSE_DAYS,
+    }
+    return quarter_rows, summary
+
+
+def normalize_header(header: str) -> str:
+    return " ".join(str(header).replace("\n", " ").replace("\r", " ").strip().lower().split())
+
+
+def parse_historical_tsv(tsv_text: str) -> list[dict]:
+    raw_text = str(tsv_text or "")
+    if not raw_text.strip():
+        return []
+
+    def to_int(value: str) -> int | None:
+        text = str(value).strip()
+        if not text:
+            return None
+        match = re.search(r"-?\d+", text.replace(",", ""))
+        if not match:
+            return None
+        try:
+            return int(match.group(0))
+        except ValueError:
+            return None
+
+    parsed_rows: list[list[str]] = []
+    used_delim = ","
+    for delim in [",", "\t"]:
+        rows = list(csv.reader(io.StringIO(raw_text), delimiter=delim))
+        if not rows:
+            continue
+        header_idx = -1
+        for idx, row in enumerate(rows):
+            normalized = [normalize_header(c) for c in row]
+            if "company" in normalized and "total days" in normalized:
+                header_idx = idx
+                break
+        if header_idx >= 0:
+            parsed_rows = rows[header_idx:]
+            used_delim = delim
+            break
+
+    if not parsed_rows:
+        return []
+
+    headers = parsed_rows[0]
+    data_rows = parsed_rows[1:]
+    header_lookup = {normalize_header(h): h for h in headers if h}
+
+    company_col = header_lookup.get("company")
+    sf_id_col = header_lookup.get("sf id")
+    total_days_col = header_lookup.get("total days")
+    sra_kickoff_col = header_lookup.get("sra kickoff (sra)")
+    sra_final_col = header_lookup.get("present final sra report (sra)")
+    nva_kickoff_col = header_lookup.get("nva kickoff (nva)")
+    nva_final_col = header_lookup.get("present final nva report (nva)")
+    if not company_col or not total_days_col:
+        return []
+
+    output: list[dict] = []
+    current_quarter_label = ""
+    quarter_row_re = re.compile(r"^q([1-4])\s+(\d{4})$", re.IGNORECASE)
+    for values in data_rows:
+        row = dict(zip(headers, values))
+        company = str(row.get(company_col, "")).strip()
+        company_l = company.lower()
+        quarter_match = quarter_row_re.match(company.strip())
+        if quarter_match:
+            current_quarter_label = f"{quarter_match.group(2)} Q{quarter_match.group(1)}"
+            continue
+        if (
+            not company
+            or company_l.startswith("totals")
+            or company_l.startswith("202")
+        ):
+            continue
+
+        total_days = to_int(row.get(total_days_col, ""))
+        if total_days is None or total_days <= 0:
+            continue
+
+        sf_id = str(row.get(sf_id_col, "")).strip() if sf_id_col else ""
+        sra_kickoff = parse_any_us_date(row.get(sra_kickoff_col, "")) if sra_kickoff_col else None
+        sra_final = parse_any_us_date(row.get(sra_final_col, "")) if sra_final_col else None
+        nva_kickoff = parse_any_us_date(row.get(nva_kickoff_col, "")) if nva_kickoff_col else None
+        nva_final = parse_any_us_date(row.get(nva_final_col, "")) if nva_final_col else None
+
+        kickoff_dt = sra_kickoff or nva_kickoff
+        final_dt = sra_final or nva_final
+        if not final_dt:
+            continue
+
+        if sra_final and nva_final:
+            track = "SRA+NVA"
+        elif sra_final:
+            track = "SRA"
+        elif nva_final:
+            track = "NVA"
+        else:
+            track = "Unknown"
+
+        kickoff_label = format_us_date(kickoff_dt) if kickoff_dt else ""
+        final_label = format_us_date(final_dt)
+        output.append(
+            {
+                "source_key": f"hist|{company}|{track}|{kickoff_label}|{final_label}|{total_days}|{used_delim}",
+                "sf_id": sf_id,
+                "company": company,
+                "track": track,
+                "kickoff_date": kickoff_label,
+                "final_date": final_label,
+                "close_days": total_days,
+                "quarter_label": current_quarter_label or quarter_label_for_date(final_dt),
+                "source": "historical_paste",
+            }
+        )
+
+    return output
+
+
 def strip_internal_fields(row: dict) -> dict:
     return {k: v for k, v in row.items() if k != "task_closed"}
 
@@ -302,6 +651,44 @@ def refresh_all_from_clickup() -> int:
     )
 
 
+def refresh_recent_from_clickup(lookback_minutes: int = 3) -> int:
+    latest_iso = latest_source_updated_at(DATABASE_PATH)
+    latest_dt = parse_iso_or_min(latest_iso)
+    if latest_dt == datetime.min:
+        return refresh_all_from_clickup()
+    if latest_dt.tzinfo is None:
+        latest_dt = latest_dt.replace(tzinfo=timezone.utc)
+
+    since_dt = latest_dt - timedelta(minutes=lookback_minutes)
+    since_ms = int(since_dt.timestamp() * 1000)
+    tasks = fetch_tasks_for_list(
+        CLICKUP_API_TOKEN,
+        CLICKUP_LIST_ID,
+        date_updated_gt=since_ms,
+    )
+    if not tasks:
+        return 0
+
+    by_sf_id: dict[str, dict] = {}
+    for task in tasks:
+        normalized = normalize_task(task, CLICKUP_SF_ID_FIELD_ID, CLICKUP_FIELD_MAP)
+        if not normalized:
+            continue
+        normalized["metrics"]["project.next_steps"] = fetch_latest_task_comment(
+            CLICKUP_API_TOKEN, normalized["task_id"]
+        )
+        sf_id = normalized["sf_id"]
+        current = by_sf_id.get(sf_id)
+        if current is None or is_better_row(normalized, current):
+            by_sf_id[sf_id] = normalized
+
+    if not by_sf_id:
+        return 0
+    return upsert_many_client_statuses(
+        DATABASE_PATH, [strip_internal_fields(row) for row in by_sf_id.values()]
+    )
+
+
 def is_better_row(candidate: dict, current: dict) -> bool:
     if candidate.get("task_closed") != current.get("task_closed"):
         return not candidate.get("task_closed")
@@ -313,6 +700,7 @@ def is_better_row(candidate: dict, current: dict) -> bool:
 def build_step_display(
     steps: dict[str, dict[str, str]],
     field_keys: dict[str, dict[str, str]],
+    step_slugs: dict[str, str],
     can_edit: bool,
 ) -> dict[str, dict[str, object]]:
     status_classes = {
@@ -331,7 +719,11 @@ def build_step_display(
 
         ecd_key = field_keys.get(step_name, {}).get("ECD", "")
         acd_key = field_keys.get(step_name, {}).get("ACD", "")
-        ecd_editable = can_edit
+        ecd_override_key = field_keys.get(step_name, {}).get("ECD_OVERRIDE", "")
+        ecd_editable = can_edit and (
+            (bool(ecd_key) and ecd_key in CLICKUP_FIELD_MAP)
+            or bool(ecd_override_key)
+        )
         acd_editable = can_edit and bool(acd_key) and acd_key in CLICKUP_FIELD_MAP
 
         extras: list[dict[str, str]] = []
@@ -341,6 +733,7 @@ def build_step_display(
             extras.append({"label": label, "value": str(value or "")})
 
         display[step_name] = {
+            "step_slug": step_slugs.get(step_name, ""),
             "status": status_value,
             "status_class": status_classes.get(status_value, "status-pill-neutral"),
             "owner": owner_value,
@@ -348,7 +741,7 @@ def build_step_display(
                 "value": ecd_value,
                 "editable": ecd_editable,
                 "metric_key": ecd_key if (ecd_key and ecd_key in CLICKUP_FIELD_MAP) else "",
-                "override_key": field_keys.get(step_name, {}).get("ECD_OVERRIDE", ""),
+                "override_key": ecd_override_key,
                 "input_value": us_to_ymd(ecd_value),
             },
             "acd": {
@@ -391,7 +784,10 @@ def add_ecd_acd_fields(
     step_slugs: dict[str, str],
     offsets: dict[str, int],
     ecd_overrides: dict[str, str],
+    acd_anchor_preferences: dict[str, bool] | None = None,
 ) -> None:
+    acd_anchor_preferences = acd_anchor_preferences or {}
+
     def find_step_title_by_slug(target_slug: str) -> str | None:
         for title, mapped_slug in step_slugs.items():
             if mapped_slug == target_slug:
@@ -403,7 +799,12 @@ def add_ecd_acd_fields(
         if not title:
             return None
         fields = steps.get(title, {})
-        return parse_us_date(fields.get("ACD", "")) or parse_us_date(fields.get("ECD", ""))
+        acd = parse_us_date(fields.get("ACD", ""))
+        ecd = parse_us_date(fields.get("ECD", ""))
+        use_acd = acd_anchor_preferences.get(target_slug, True)
+        if use_acd:
+            return acd or ecd
+        return ecd or acd
 
     def set_ecd_if_blank(step_slug: str, anchor_slug: str, days: int) -> None:
         step_title = find_step_title_by_slug(step_slug)
@@ -416,40 +817,51 @@ def add_ecd_acd_fields(
         fields["ECD"] = format_us_date(shift_to_monday_if_weekend(anchor + timedelta(days=days)))
         field_keys.setdefault(step_title, {}).setdefault("ECD", "")
 
+    def set_ecd_from_date_if_blank(step_slug: str, anchor: datetime | None, days: int) -> None:
+        step_title = find_step_title_by_slug(step_slug)
+        if not step_title or not anchor:
+            return
+        fields = steps.setdefault(step_title, {})
+        if fields.get("ECD"):
+            return
+        fields["ECD"] = format_us_date(shift_to_monday_if_weekend(anchor + timedelta(days=days)))
+        field_keys.setdefault(step_title, {}).setdefault("ECD", "")
+
+    def shift_business_safe(value: datetime, delta_days: int) -> datetime:
+        shifted = value + timedelta(days=delta_days)
+        if delta_days < 0:
+            return shift_to_friday_if_weekend(shifted)
+        return shift_to_monday_if_weekend(shifted)
+
     kickoff_title = None
-    kickoff_date = None
+    kickoff_slug = None
     for step_title, slug in step_slugs.items():
         if "kickoff" in slug:
             kickoff_title = step_title
-            kickoff_date = parse_us_date(steps.get(step_title, {}).get("ACD", ""))
+            kickoff_slug = slug
             break
 
     if kickoff_title:
         kickoff_fields = steps.get(kickoff_title, {})
-        kickoff_fields.pop("ECD", None)
+        kickoff_fields["ECD"] = kickoff_fields.get("ACD", "")
         field_keys.setdefault(kickoff_title, {}).pop("ECD", None)
         kickoff_fields.setdefault("ACD", "")
         kickoff_fields["Status"] = compute_step_status(kickoff_fields, is_kickoff=True)
         ordered = {
             "Status": kickoff_fields.get("Status", ""),
+            "ECD": kickoff_fields.get("ECD", ""),
             "ACD": kickoff_fields.get("ACD", ""),
         }
-        ordered_keys = {"ACD": field_keys.get(kickoff_title, {}).get("ACD", "")}
+        ordered_keys = {
+            "ECD": field_keys.get(kickoff_title, {}).get("ECD", ""),
+            "ACD": field_keys.get(kickoff_title, {}).get("ACD", ""),
+        }
         for key, value in kickoff_fields.items():
-            if key not in {"Status", "ACD"}:
+            if key not in {"Status", "ECD", "ACD"}:
                 ordered[key] = value
                 ordered_keys[key] = field_keys.get(kickoff_title, {}).get(key, "")
         steps[kickoff_title] = ordered
         field_keys[kickoff_title] = ordered_keys
-
-    # Apply manual ECD overrides early so downstream anchors can use them.
-    for step_title, slug in step_slugs.items():
-        override_value = ecd_overrides.get(slug, "")
-        if not override_value:
-            continue
-        fields = steps.setdefault(step_title, {})
-        fields["ECD"] = override_value
-        field_keys.setdefault(step_title, {})["ECD_OVERRIDE"] = f"override:{slug}.ecd"
 
     # Explicit SRA rules to avoid unintended cross-step drift:
     # - Receive Policies... ECD = Kickoff anchor + 7 days
@@ -575,7 +987,93 @@ def add_ecd_acd_fields(
                     present_fields["ECD"] = ""
             field_keys.setdefault(present_title, {}).setdefault("ECD", "")
 
-    # Fallback for all other steps: kickoff anchor + offset.
+    # Explicit NVA rules:
+    # - Receive Credentials ECD = NVA Kickoff anchor + 7 days
+    # - Verify Access ECD = Receive Credentials anchor + 7 days
+    # - Scans Complete ECD:
+    #   - if Receive Credentials ACD or Verify Access ACD is blank => NVA Kickoff anchor + 28 days
+    #   - else => max(Receive Credentials ACD, Verify Access ACD) + 21 days
+    # - Compile Report ECD:
+    #   - if Present Final NVA Report ACD is blank => Scans Complete ECD + 7 days
+    #   - else => Present Final NVA Report ACD - 1 day
+    # - Access Removed ECD:
+    #   - if Present Final NVA Report ACD is blank => Scans Complete ECD + 5 days
+    #   - else => Present Final NVA Report ACD - 1 day
+    # - Schedule Final NVA Report ECD:
+    #   - if Scans Complete ACD is blank => Scans Complete ECD + 12 days
+    #   - else => Scans Complete ACD + 21 days
+    # - Present Final NVA Report ECD:
+    #   - if ACD is blank => Scans Complete ECD + 19 days
+    #   - else => mirror ACD
+    set_ecd_if_blank("receive_credentials", "nva_kickoff", 7)
+    set_ecd_if_blank("verify_access", "receive_credentials", 7)
+
+    scans_slug = "scans_complete"
+    scans_title = find_step_title_by_slug(scans_slug)
+    if scans_title:
+        scans_fields = steps.setdefault(scans_title, {})
+        if not scans_fields.get("ECD"):
+            receive_title = find_step_title_by_slug("receive_credentials")
+            verify_title = find_step_title_by_slug("verify_access")
+            receive_acd = parse_us_date(steps.get(receive_title, {}).get("ACD", "")) if receive_title else None
+            verify_acd = parse_us_date(steps.get(verify_title, {}).get("ACD", "")) if verify_title else None
+
+            if not receive_acd or not verify_acd:
+                kickoff_anchor = anchor_date_for_slug("nva_kickoff")
+                set_ecd_from_date_if_blank(scans_slug, kickoff_anchor, 28)
+            else:
+                set_ecd_from_date_if_blank(scans_slug, max(receive_acd, verify_acd), 21)
+
+    scans_anchor_title = find_step_title_by_slug("scans_complete")
+    scans_fields = steps.get(scans_anchor_title, {}) if scans_anchor_title else {}
+    scans_ecd = parse_us_date(scans_fields.get("ECD", ""))
+    scans_acd = parse_us_date(scans_fields.get("ACD", ""))
+
+    present_nva_slug = "present_final_nva_report"
+    present_nva_title = find_step_title_by_slug(present_nva_slug)
+    present_nva_fields = steps.setdefault(present_nva_title, {}) if present_nva_title else {}
+    present_nva_acd = parse_us_date(present_nva_fields.get("ACD", "")) if present_nva_title else None
+
+    compile_slug = "compile_report"
+    compile_title = find_step_title_by_slug(compile_slug)
+    if compile_title:
+        compile_fields = steps.setdefault(compile_title, {})
+        if present_nva_acd:
+            compile_fields["ECD"] = format_us_date(
+                shift_to_friday_if_weekend(present_nva_acd - timedelta(days=1))
+            )
+            field_keys.setdefault(compile_title, {}).setdefault("ECD", "")
+        else:
+            set_ecd_from_date_if_blank(compile_slug, scans_ecd, 7)
+
+    access_removed_slug = "access_removed"
+    access_removed_title = find_step_title_by_slug(access_removed_slug)
+    if access_removed_title:
+        access_removed_fields = steps.setdefault(access_removed_title, {})
+        if present_nva_acd:
+            access_removed_fields["ECD"] = format_us_date(
+                shift_to_friday_if_weekend(present_nva_acd - timedelta(days=1))
+            )
+            field_keys.setdefault(access_removed_title, {}).setdefault("ECD", "")
+        else:
+            set_ecd_from_date_if_blank(access_removed_slug, scans_ecd, 5)
+
+    schedule_nva_slug = "schedule_final_nva_report"
+    schedule_nva_title = find_step_title_by_slug(schedule_nva_slug)
+    if schedule_nva_title:
+        if scans_acd:
+            set_ecd_from_date_if_blank(schedule_nva_slug, scans_acd, 21)
+        else:
+            set_ecd_from_date_if_blank(schedule_nva_slug, scans_ecd, 12)
+
+    if present_nva_title:
+        if present_nva_acd:
+            present_nva_fields["ECD"] = format_us_date(present_nva_acd)
+            field_keys.setdefault(present_nva_title, {}).setdefault("ECD", "")
+        else:
+            set_ecd_from_date_if_blank(present_nva_slug, scans_ecd, 19)
+
+    # Fallback for all other steps: section kickoff anchor + offset.
     for slug, offset_days in offsets.items():
         if slug in {
             "receive_policies_and_procedures_baa",
@@ -587,9 +1085,68 @@ def add_ecd_acd_fields(
             "schedule_final_sra_report",
             "present_final_sra_report",
             "sra_kickoff",
+            "receive_credentials",
+            "verify_access",
+            "scans_complete",
+            "access_removed",
+            "compile_report",
+            "schedule_final_nva_report",
+            "present_final_nva_report",
+            "nva_kickoff",
         }:
             continue
-        set_ecd_if_blank(slug, "sra_kickoff", offset_days)
+        if kickoff_slug:
+            set_ecd_if_blank(slug, kickoff_slug, offset_days)
+
+    # Apply manual ECD overrides and propagate day-delta across later steps in the same track.
+    ordered_slugs: list[str] = []
+    if kickoff_slug:
+        ordered_slugs.append(kickoff_slug)
+    for slug in offsets.keys():
+        if slug in step_slugs.values() and slug not in ordered_slugs:
+            ordered_slugs.append(slug)
+    for slug in step_slugs.values():
+        if slug not in ordered_slugs:
+            ordered_slugs.append(slug)
+
+    for index, slug in enumerate(ordered_slugs):
+        override_value = str(ecd_overrides.get(slug, "")).strip()
+        if not override_value:
+            continue
+        override_dt = parse_us_date(override_value)
+        if not override_dt:
+            continue
+        step_title = find_step_title_by_slug(slug)
+        if not step_title:
+            continue
+
+        fields = steps.setdefault(step_title, {})
+        current_ecd_dt = parse_us_date(fields.get("ECD", ""))
+        delta_days = (
+            (override_dt.date() - current_ecd_dt.date()).days if current_ecd_dt else 0
+        )
+        fields["ECD"] = format_us_date(override_dt)
+        field_keys.setdefault(step_title, {})["ECD_OVERRIDE"] = f"override:{slug}.ecd"
+
+        if delta_days == 0:
+            continue
+
+        for later_slug in ordered_slugs[index + 1 :]:
+            later_title = find_step_title_by_slug(later_slug)
+            if not later_title:
+                continue
+            later_fields = steps.setdefault(later_title, {})
+
+            # If ACD exists, treat step as complete and do not shift it.
+            if parse_us_date(later_fields.get("ACD", "")):
+                continue
+
+            later_ecd_dt = parse_us_date(later_fields.get("ECD", ""))
+            if not later_ecd_dt:
+                continue
+            later_fields["ECD"] = format_us_date(
+                shift_business_safe(later_ecd_dt, delta_days)
+            )
 
     for step_title, fields in list(steps.items()):
         slug = step_slugs.get(step_title, "")
@@ -597,24 +1154,25 @@ def add_ecd_acd_fields(
 
         fields.setdefault("ACD", "")
         field_keys.setdefault(step_title, {}).setdefault("ACD", "")
+        fields.setdefault("ECD", "")
+        field_keys.setdefault(step_title, {}).setdefault("ECD", "")
         if not is_kickoff:
-            fields.setdefault("ECD", "")
-            field_keys.setdefault(step_title, {}).setdefault("ECD", "")
             field_keys.setdefault(step_title, {}).setdefault("ECD_OVERRIDE", f"override:{slug}.ecd")
 
         fields["Status"] = compute_step_status(fields, is_kickoff=is_kickoff)
-        ordered = {"Status": fields.get("Status", ""), "ACD": fields.get("ACD", "")}
-        if not is_kickoff:
-            ordered["ECD"] = fields.get("ECD", "")
+        ordered = {
+            "Status": fields.get("Status", ""),
+            "ECD": fields.get("ECD", ""),
+            "ACD": fields.get("ACD", ""),
+        }
         ordered_keys = {
+            "ECD": field_keys.get(step_title, {}).get("ECD", ""),
             "ACD": field_keys.get(step_title, {}).get("ACD", ""),
         }
-        if not is_kickoff:
-            ordered_keys["ECD"] = field_keys.get(step_title, {}).get("ECD", "")
-            if field_keys.get(step_title, {}).get("ECD_OVERRIDE", ""):
-                ordered_keys["ECD_OVERRIDE"] = field_keys.get(step_title, {}).get(
-                    "ECD_OVERRIDE", ""
-                )
+        if not is_kickoff and field_keys.get(step_title, {}).get("ECD_OVERRIDE", ""):
+            ordered_keys["ECD_OVERRIDE"] = field_keys.get(step_title, {}).get(
+                "ECD_OVERRIDE", ""
+            )
         for key, value in fields.items():
             if key not in {"Status", "ECD", "ACD"}:
                 ordered[key] = value
@@ -623,8 +1181,23 @@ def add_ecd_acd_fields(
         field_keys[step_title] = ordered_keys
 
 
-def build_dashboard_view(status: dict, ecd_overrides: dict[str, str], can_edit: bool) -> dict:
+def build_dashboard_view(
+    status: dict,
+    ecd_overrides: dict[str, str],
+    can_edit: bool,
+    acd_anchor_preferences: dict[str, bool] | None = None,
+) -> dict:
     metrics = status.get("metrics", {}) or {}
+    sra_toggle = parse_bool(
+        metrics.get("project.sra_enabled")
+        or metrics.get("sra.enabled")
+        or metrics.get("sra_enabled")
+    )
+    nva_toggle = parse_bool(
+        metrics.get("project.nva_enabled")
+        or metrics.get("nva.enabled")
+        or metrics.get("nva_enabled")
+    )
     location_value = str(
         metrics.get("project.remote_onsite")
         or metrics.get("project.location")
@@ -679,12 +1252,30 @@ def build_dashboard_view(status: dict, ecd_overrides: dict[str, str], can_edit: 
         else:
             extra_metrics[key] = value
 
+    # If both sections are enabled on the same task, mirror SRA kickoff date to NVA kickoff.
+    if sra_toggle is True and nva_toggle is True:
+        sra_kickoff_title = next(
+            (title for title, slug in sra_step_slugs.items() if slug == "sra_kickoff"),
+            None,
+        )
+        nva_kickoff_title = next(
+            (title for title, slug in nva_step_slugs.items() if slug == "nva_kickoff"),
+            None,
+        )
+        if sra_kickoff_title and nva_kickoff_title:
+            sra_kickoff_acd = str(
+                sra_steps.get(sra_kickoff_title, {}).get("ACD", "")
+            ).strip()
+            if sra_kickoff_acd:
+                nva_steps.setdefault(nva_kickoff_title, {})["ACD"] = sra_kickoff_acd
+
     add_ecd_acd_fields(
         sra_steps,
         sra_field_keys,
         sra_step_slugs,
         SRA_ECD_OFFSETS_DAYS,
         ecd_overrides,
+        acd_anchor_preferences=acd_anchor_preferences,
     )
     add_ecd_acd_fields(
         nva_steps,
@@ -692,7 +1283,27 @@ def build_dashboard_view(status: dict, ecd_overrides: dict[str, str], can_edit: 
         nva_step_slugs,
         NVA_ECD_OFFSETS_DAYS,
         ecd_overrides,
+        acd_anchor_preferences=acd_anchor_preferences,
     )
+
+    # Keep Present Final NVA Report ECD aligned to Present Final SRA Report ECD.
+    sra_present_title = next(
+        (title for title, slug in sra_step_slugs.items() if slug == "present_final_sra_report"),
+        None,
+    )
+    nva_present_title = next(
+        (title for title, slug in nva_step_slugs.items() if slug == "present_final_nva_report"),
+        None,
+    )
+    if sra_present_title and nva_present_title:
+        sra_present_ecd = str(sra_steps.get(sra_present_title, {}).get("ECD", "")).strip()
+        if sra_present_ecd:
+            nva_present_fields = nva_steps.setdefault(nva_present_title, {})
+            nva_present_fields["ECD"] = sra_present_ecd
+            nva_present_fields["Status"] = compute_step_status(
+                nva_present_fields, is_kickoff=False
+            )
+            nva_field_keys.setdefault(nva_present_title, {}).setdefault("ECD", "")
 
     default_owner = str(status.get("task_name", "")).strip() or "Not assigned"
     for step_name, step_fields in sra_steps.items():
@@ -711,32 +1322,27 @@ def build_dashboard_view(status: dict, ecd_overrides: dict[str, str], can_edit: 
     project_details: dict[str, str] = {
         "Status": apply_acronyms(to_title_case(status.get("task_status", ""))),
     }
-    for key in ["Project Lead", "Location", "Next Steps", "Project Support"]:
+    for key in ["Project Lead", "Project Support", "Location", "Next Steps"]:
         value = str(project_values.get(key, "")).strip()
         if key == "Next Steps":
             project_details[key] = value or "Not set"
         elif value:
             project_details[key] = value
 
-    sra_toggle = parse_bool(
-        metrics.get("project.sra_enabled")
-        or metrics.get("sra.enabled")
-        or metrics.get("sra_enabled")
-    )
-    nva_toggle = parse_bool(
-        metrics.get("project.nva_enabled")
-        or metrics.get("nva.enabled")
-        or metrics.get("nva_enabled")
-    )
-    show_sra = sra_toggle if sra_toggle is not None else bool(sra_steps)
-    show_nva = nva_toggle if nva_toggle is not None else bool(nva_steps)
+    # Strict visibility: only show a section when its explicit enable checkbox is true.
+    show_sra = sra_toggle is True
+    show_nva = nva_toggle is True
 
     return {
         "project_details": project_details,
         "show_sra": show_sra,
         "show_nva": show_nva,
-        "sra_steps": build_step_display(sra_steps, sra_field_keys, can_edit=can_edit),
-        "nva_steps": build_step_display(nva_steps, nva_field_keys, can_edit=can_edit),
+        "sra_steps": build_step_display(
+            sra_steps, sra_field_keys, sra_step_slugs, can_edit=can_edit
+        ),
+        "nva_steps": build_step_display(
+            nva_steps, nva_field_keys, nva_step_slugs, can_edit=can_edit
+        ),
         "extra_metrics": extra_metrics,
     }
 
@@ -856,7 +1462,9 @@ def admin_projects():
     # Optional live refresh, disabled by default for faster navigation.
     if request.args.get("refresh") == "1":
         try:
-            refresh_all_from_clickup()
+            recent_count = refresh_recent_from_clickup()
+            if recent_count == 0:
+                refresh_all_from_clickup()
         except Exception:
             # If ClickUp is temporarily unavailable, fall back to cached DB data.
             pass
@@ -895,6 +1503,7 @@ def admin_projects():
             {
                 "task_name": row["task_name"],
                 "sf_id": row["sf_id"],
+                "project_lead": str(metrics.get("project.project_lead", "")).strip() or "Not assigned",
                 "task_status": status_clean,
                 "status_url": (
                     f"/status/{row['sf_id']}?sig={sign_sf_id(row['sf_id'])}"
@@ -938,6 +1547,17 @@ def admin_projects():
             counts[key] = counts.get(key, 0) + 1
         return dict(sorted(counts.items(), key=lambda kv: kv[0].lower()))
 
+    active_status_counts = status_counts(active)
+    completed_status_counts = status_counts(completed)
+    all_statuses = sorted(
+        set(active_status_counts) | set(completed_status_counts),
+        key=lambda value: value.lower(),
+    )
+    all_project_leads = sorted(
+        {str(project.get("project_lead", "")).strip() or "Not assigned" for project in projects},
+        key=lambda value: value.lower(),
+    )
+
     return render_template(
         "admin_projects.html",
         completed_groups=group_projects_for_admin(completed),
@@ -945,9 +1565,136 @@ def admin_projects():
         count=len(projects),
         completed_count=len(completed),
         active_count=len(active),
-        completed_status_counts=status_counts(completed),
-        active_status_counts=status_counts(active),
+        completed_status_counts=completed_status_counts,
+        active_status_counts=active_status_counts,
+        all_statuses=all_statuses,
+        all_project_leads=all_project_leads,
+        projects_url=f"/admin/projects?key={admin_key}",
+        metrics_url=f"/admin/metrics?key={admin_key}",
     )
+
+
+@app.get("/admin/metrics")
+def admin_metrics():
+    require_admin_page()
+    admin_key = request.args.get("key", "")
+    historical_rows = list_historical_close_metrics(DATABASE_PATH)
+    historical_companies = {
+        str(row.get("company", "")).strip().lower()
+        for row in historical_rows
+        if str(row.get("company", "")).strip()
+    }
+    historical_sf_ids = {
+        str(row.get("sf_id", "")).strip()
+        for row in historical_rows
+        if str(row.get("sf_id", "")).strip()
+    }
+    live_rows, live_quality = live_close_metric_rows(list_client_statuses(DATABASE_PATH))
+    covered_name_set: set[str] = set()
+    uncovered_name_set: set[str] = set()
+    for record in live_quality.get("missing_records", []):
+        name = str(record.get("company", "")).strip()
+        sf_id = str(record.get("sf_id", "")).strip()
+        if not name and not sf_id:
+            continue
+        name_l = name.lower()
+        name_alias = name_l.replace("(remote)", "").replace("(renewal)", "").strip()
+        is_covered = (
+            (sf_id and sf_id in historical_sf_ids)
+            or (name_l in historical_companies)
+            or (name_alias in historical_companies)
+        )
+        if is_covered:
+            covered_name_set.add(name)
+        else:
+            uncovered_name_set.add(name)
+    covered_missing = sorted(covered_name_set)
+    uncovered_missing = sorted(uncovered_name_set)
+    live_quality["missing_covered_by_historical"] = len(covered_missing)
+    live_quality["missing_uncovered"] = max(
+        live_quality.get("completed_task_missing_close_dates", 0) - len(covered_missing),
+        0,
+    )
+    live_quality["missing_covered_names"] = covered_missing
+    live_quality["missing_uncovered_names"] = uncovered_missing
+    historical_keys = {
+        "|".join(
+            [
+                str(r.get("company", "")).strip().lower(),
+                str(r.get("track", "")).strip().upper(),
+                str(r.get("kickoff_date", "")).strip(),
+                str(r.get("final_date", "")).strip(),
+            ]
+        )
+        for r in historical_rows
+    }
+    live_rows_deduped = [
+        r
+        for r in live_rows
+        if "|".join(
+            [
+                str(r.get("company", "")).strip().lower(),
+                str(r.get("track", "")).strip().upper(),
+                str(r.get("kickoff_date", "")).strip(),
+                str(r.get("final_date", "")).strip(),
+            ]
+        )
+        not in historical_keys
+    ]
+    all_rows = historical_rows + live_rows_deduped
+    all_rows = sorted(
+        all_rows,
+        key=lambda row: parse_any_us_date(row.get("final_date", "")) or datetime.min,
+        reverse=True,
+    )
+    quarter_rows, summary = summarize_metrics_rows(all_rows)
+    historical_quarters = sorted({row.get("quarter_label", "") for row in historical_rows if row.get("quarter_label")})
+    historical_range = (
+        f"{historical_quarters[0]} to {historical_quarters[-1]}"
+        if historical_quarters
+        else "No historical rows loaded"
+    )
+    all_quarters = sorted({row["quarter_label"] for row in all_rows})
+    all_tracks = sorted({row["track"] for row in all_rows})
+    all_sources = sorted({row.get("source", "") for row in all_rows})
+    coverage_pct = (
+        round(
+            100
+            * live_quality["completed_task_with_valid_close"]
+            / live_quality["completed_task_total"],
+            1,
+        )
+        if live_quality["completed_task_total"]
+        else None
+    )
+    return render_template(
+        "admin_metrics.html",
+        summary=summary,
+        quarter_rows=quarter_rows,
+        metric_rows=all_rows,
+        all_quarters=all_quarters,
+        all_tracks=all_tracks,
+        all_sources=all_sources,
+        coverage_pct=coverage_pct,
+        live_quality=live_quality,
+        historical_range=historical_range,
+        total_rows=len(all_rows),
+        historical_count=len(historical_rows),
+        live_count=len(live_rows_deduped),
+        projects_url=f"/admin/projects?key={admin_key}",
+        metrics_url=f"/admin/metrics?key={admin_key}",
+        key=admin_key,
+    )
+
+
+@app.post("/admin/metrics/import")
+def admin_metrics_import():
+    require_admin_page()
+    payload = str(request.form.get("historical_tsv", ""))
+    parsed = parse_historical_tsv(payload)
+    saved = upsert_historical_close_metrics(DATABASE_PATH, parsed) if parsed else 0
+    admin_key = request.args.get("key", "")
+    return redirect(url_for("admin_metrics", key=admin_key, imported=saved))
 
 
 @app.post("/status/<sf_id>/update-date")
@@ -960,6 +1707,8 @@ def update_date(sf_id: str):
 
     metric_key = str(request.form.get("metric_key", "")).strip()
     override_key = str(request.form.get("override_key", "")).strip()
+    step_slug = str(request.form.get("step_slug", "")).strip().lower()
+    adjust_following = str(request.form.get("adjust_following", "yes")).strip().lower()
     value_ymd = str(request.form.get("value", "")).strip()
     if not metric_key and not override_key:
         abort(400)
@@ -974,6 +1723,13 @@ def update_date(sf_id: str):
         field_id = CLICKUP_FIELD_MAP[metric_key]
         clickup_value = ymd_to_clickup_ms(value_ymd) if value_ymd else None
         set_task_custom_field_value(CLICKUP_API_TOKEN, status["task_id"], field_id, clickup_value)
+        if step_slug and (metric_key.endswith(".date") or metric_key.endswith(".acd")):
+            upsert_acd_anchor_preference(
+                DATABASE_PATH,
+                sf_id,
+                step_slug,
+                use_acd=(adjust_following != "no"),
+            )
 
         full_task = fetch_task_by_id(CLICKUP_API_TOKEN, status["task_id"])
         normalized = normalize_task(full_task, CLICKUP_SF_ID_FIELD_ID, CLICKUP_FIELD_MAP)
@@ -1046,7 +1802,13 @@ def client_status(sf_id: str):
     can_admin_nav = has_admin_key_access()
     admin_key = request.args.get("key", "")
     overrides = get_ecd_overrides(DATABASE_PATH, sf_id)
-    dashboard = build_dashboard_view(status, ecd_overrides=overrides, can_edit=can_edit)
+    acd_anchor_preferences = get_acd_anchor_preferences(DATABASE_PATH, sf_id)
+    dashboard = build_dashboard_view(
+        status,
+        ecd_overrides=overrides,
+        can_edit=can_edit,
+        acd_anchor_preferences=acd_anchor_preferences,
+    )
     return render_template(
         "status.html",
         status=status,

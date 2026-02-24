@@ -14,16 +14,28 @@ def clickup_headers(api_token: str) -> dict[str, str]:
     }
 
 
-def fetch_tasks_for_list(api_token: str, list_id: str) -> list[dict[str, Any]]:
+def fetch_tasks_for_list(
+    api_token: str,
+    list_id: str,
+    date_updated_gt: int | None = None,
+) -> list[dict[str, Any]]:
     url = f"https://api.clickup.com/api/v2/list/{list_id}/task"
     tasks: list[dict[str, Any]] = []
     page = 0
 
     while True:
+        params: dict[str, Any] = {
+            "page": page,
+            "subtasks": "true",
+            "include_closed": "true",
+        }
+        if date_updated_gt is not None:
+            params["date_updated_gt"] = date_updated_gt
+
         response = requests.get(
             url,
             headers=clickup_headers(api_token),
-            params={"page": page, "subtasks": "true", "include_closed": "true"},
+            params=params,
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()

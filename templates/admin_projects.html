@@ -7,6 +7,11 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   </head>
   <body>
+    <aside class="admin-side-menu">
+      <h3>Admin Menu</h3>
+      <a class="admin-nav-link" href="{{ projects_url }}">Projects</a>
+      <a class="admin-nav-link" href="{{ metrics_url }}">Metrics</a>
+    </aside>
     <main class="page">
       <header class="top">
         <h1>Admin Dashboard</h1>
@@ -16,17 +21,54 @@
       <section class="panel">
         <div class="admin-controls">
           <input id="projectSearch" class="project-search" type="search" placeholder="Search by client name or SF ID..." oninput="filterProjects()" />
-          <select id="statusFilter" class="project-filter" onchange="filterProjects()">
-            <option value="">All statuses</option>
-            {% for status_name, _ in active_status_counts.items() %}
-              <option value="{{ status_name|lower }}">{{ status_name }}</option>
-            {% endfor %}
-            {% for status_name, _ in completed_status_counts.items() %}
-              {% if status_name not in active_status_counts %}
-                <option value="{{ status_name|lower }}">{{ status_name }}</option>
-              {% endif %}
-            {% endfor %}
-          </select>
+          <div class="status-multiselect" id="statusFilterControl">
+            <button
+              type="button"
+              id="statusFilterToggle"
+              class="project-filter status-toggle"
+              onclick="toggleStatusFilterPanel()"
+            >
+              All statuses
+            </button>
+            <div id="statusFilterPanel" class="status-filter-panel" hidden>
+              <div id="statusFilter" class="status-filter-list">
+                {% for status_name in all_statuses %}
+                  <label class="status-filter-option">
+                    <input type="checkbox" value="{{ status_name|lower }}" onchange="onStatusSelectionChange()" />
+                    <span>{{ status_name }}</span>
+                  </label>
+                {% endfor %}
+              </div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearStatusSelection()">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closeStatusFilterPanel()">Done</button>
+              </div>
+            </div>
+          </div>
+          <div class="status-multiselect" id="leadFilterControl">
+            <button
+              type="button"
+              id="leadFilterToggle"
+              class="project-filter status-toggle"
+              onclick="toggleLeadFilterPanel()"
+            >
+              All project leads
+            </button>
+            <div id="leadFilterPanel" class="status-filter-panel" hidden>
+              <div id="leadFilter" class="status-filter-list">
+                {% for lead_name in all_project_leads %}
+                  <label class="status-filter-option">
+                    <input type="checkbox" value="{{ lead_name|lower }}" onchange="onLeadSelectionChange()" />
+                    <span>{{ lead_name }}</span>
+                  </label>
+                {% endfor %}
+              </div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearLeadSelection()">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closeLeadFilterPanel()">Done</button>
+              </div>
+            </div>
+          </div>
           <a class="project-filter refresh-link" href="/admin/projects?key={{ request.args.get('key', '') }}&refresh=1">Refresh From ClickUp</a>
         </div>
       </section>
@@ -46,6 +88,7 @@
                 <tr>
                   <th>Client</th>
                   <th>SF ID</th>
+                  <th>Project Lead</th>
                   <th>Status</th>
                   <th>Start Date</th>
                   <th>Completed Date</th>
@@ -53,9 +96,10 @@
               </thead>
               <tbody>
                 {% for project in projects %}
-                  <tr data-status="{{ project.task_status|lower }}" data-section="active">
+                  <tr data-status="{{ project.task_status|lower }}" data-project-lead="{{ project.project_lead|lower }}" data-section="active">
                     <td><a href="{{ project.status_url }}">{{ project.task_name }}</a></td>
                     <td>{{ project.sf_id }}</td>
+                    <td>{{ project.project_lead }}</td>
                     <td>{{ project.task_status }}</td>
                     <td>{{ project.start_date_label }}</td>
                     <td>{{ project.completed_date_label }}</td>
@@ -84,6 +128,7 @@
                 <tr>
                   <th>Client</th>
                   <th>SF ID</th>
+                  <th>Project Lead</th>
                   <th>Status</th>
                   <th>Start Date</th>
                   <th>Completed Date</th>
@@ -91,9 +136,10 @@
               </thead>
               <tbody>
                 {% for project in projects %}
-                  <tr data-status="{{ project.task_status|lower }}" data-section="completed">
+                  <tr data-status="{{ project.task_status|lower }}" data-project-lead="{{ project.project_lead|lower }}" data-section="completed">
                     <td><a href="{{ project.status_url }}">{{ project.task_name }}</a></td>
                     <td>{{ project.sf_id }}</td>
+                    <td>{{ project.project_lead }}</td>
                     <td>{{ project.task_status }}</td>
                     <td>{{ project.start_date_label }}</td>
                     <td>{{ project.completed_date_label }}</td>
@@ -108,19 +154,77 @@
       </section>
     </main>
     <script>
+      var ADMIN_FILTERS_KEY = "medcurity_admin_filters_v1";
+
+      function saveAdminFilters() {
+        var searchValue = (document.getElementById("projectSearch") || {}).value || "";
+        var selectedStatuses = selectedStatusValues();
+        var selectedLeads = selectedLeadValues();
+        var state = {
+          search: searchValue,
+          statuses: selectedStatuses,
+          leads: selectedLeads,
+        };
+        try {
+          window.localStorage.setItem(ADMIN_FILTERS_KEY, JSON.stringify(state));
+        } catch (error) {}
+      }
+
+      function loadAdminFilters() {
+        var raw = "";
+        try {
+          raw = window.localStorage.getItem(ADMIN_FILTERS_KEY) || "";
+        } catch (error) {}
+        if (!raw) return;
+
+        var parsed = null;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (error) {
+          return;
+        }
+        if (!parsed || typeof parsed !== "object") return;
+
+        var searchInput = document.getElementById("projectSearch");
+        if (searchInput && typeof parsed.search === "string") {
+          searchInput.value = parsed.search;
+        }
+
+        var statusSet = new Set(Array.isArray(parsed.statuses) ? parsed.statuses : []);
+        document.querySelectorAll("#statusFilter input[type='checkbox']").forEach(function (box) {
+          box.checked = statusSet.has((box.value || "").toLowerCase());
+        });
+
+        var leadSet = new Set(Array.isArray(parsed.leads) ? parsed.leads : []);
+        document.querySelectorAll("#leadFilter input[type='checkbox']").forEach(function (box) {
+          box.checked = leadSet.has((box.value || "").toLowerCase());
+        });
+      }
+
       function filterProjects() {
         var input = document.getElementById("projectSearch");
         var filter = (input.value || "").toLowerCase();
-        var statusFilter = (document.getElementById("statusFilter").value || "").toLowerCase();
+        var selectedStatuses = Array.from(
+          document.querySelectorAll("#statusFilter input[type='checkbox']:checked")
+        ).map(function (box) {
+          return (box.value || "").toLowerCase();
+        });
+        var selectedLeads = Array.from(
+          document.querySelectorAll("#leadFilter input[type='checkbox']:checked")
+        ).map(function (box) {
+          return (box.value || "").toLowerCase();
+        });
         var rows = document.querySelectorAll(".projectsTable tbody tr");
         var activeVisible = 0;
         var completedVisible = 0;
         rows.forEach(function (row) {
           var text = (row.textContent || "").toLowerCase();
           var rowStatus = (row.getAttribute("data-status") || "").toLowerCase();
+          var rowLead = (row.getAttribute("data-project-lead") || "").toLowerCase();
           var matchesText = text.indexOf(filter) >= 0;
-          var matchesStatus = !statusFilter || rowStatus === statusFilter;
-          var visible = matchesText && matchesStatus;
+          var matchesStatus = selectedStatuses.length === 0 || selectedStatuses.indexOf(rowStatus) >= 0;
+          var matchesLead = selectedLeads.length === 0 || selectedLeads.indexOf(rowLead) >= 0;
+          var visible = matchesText && matchesStatus && matchesLead;
           row.style.display = visible ? "" : "none";
           if (visible) {
             if (row.getAttribute("data-section") === "active") {
@@ -138,7 +242,103 @@
             h2.textContent = "Completed Projects (" + completedVisible + ")";
           }
         });
+        saveAdminFilters();
       }
+
+      function selectedStatusValues() {
+        return Array.from(document.querySelectorAll("#statusFilter input[type='checkbox']:checked")).map(function (
+          box
+        ) {
+          return (box.value || "").toLowerCase();
+        });
+      }
+
+      function updateStatusFilterLabel() {
+        var toggle = document.getElementById("statusFilterToggle");
+        var selected = selectedStatusValues();
+        if (!toggle) return;
+        toggle.textContent = selected.length === 0 ? "All statuses" : selected.length + " selected";
+      }
+
+      function onStatusSelectionChange() {
+        updateStatusFilterLabel();
+        filterProjects();
+      }
+
+      function clearStatusSelection() {
+        document.querySelectorAll("#statusFilter input[type='checkbox']").forEach(function (box) {
+          box.checked = false;
+        });
+        onStatusSelectionChange();
+      }
+
+      function toggleStatusFilterPanel() {
+        var panel = document.getElementById("statusFilterPanel");
+        if (!panel) return;
+        panel.hidden = !panel.hidden;
+      }
+
+      function closeStatusFilterPanel() {
+        var panel = document.getElementById("statusFilterPanel");
+        if (!panel) return;
+        panel.hidden = true;
+      }
+
+      function selectedLeadValues() {
+        return Array.from(document.querySelectorAll("#leadFilter input[type='checkbox']:checked")).map(function (
+          box
+        ) {
+          return (box.value || "").toLowerCase();
+        });
+      }
+
+      function updateLeadFilterLabel() {
+        var toggle = document.getElementById("leadFilterToggle");
+        var selected = selectedLeadValues();
+        if (!toggle) return;
+        toggle.textContent = selected.length === 0 ? "All project leads" : selected.length + " selected";
+      }
+
+      function onLeadSelectionChange() {
+        updateLeadFilterLabel();
+        filterProjects();
+      }
+
+      function clearLeadSelection() {
+        document.querySelectorAll("#leadFilter input[type='checkbox']").forEach(function (box) {
+          box.checked = false;
+        });
+        onLeadSelectionChange();
+      }
+
+      function toggleLeadFilterPanel() {
+        var panel = document.getElementById("leadFilterPanel");
+        if (!panel) return;
+        panel.hidden = !panel.hidden;
+      }
+
+      function closeLeadFilterPanel() {
+        var panel = document.getElementById("leadFilterPanel");
+        if (!panel) return;
+        panel.hidden = true;
+      }
+
+      document.addEventListener("DOMContentLoaded", function () {
+        document.addEventListener("click", function (event) {
+          var control = document.getElementById("statusFilterControl");
+          if (control && !control.contains(event.target)) {
+            closeStatusFilterPanel();
+          }
+          var leadControl = document.getElementById("leadFilterControl");
+          if (leadControl && !leadControl.contains(event.target)) {
+            closeLeadFilterPanel();
+          }
+        });
+        loadAdminFilters();
+        updateStatusFilterLabel();
+        updateLeadFilterLabel();
+        filterProjects();
+      });
     </script>
   </body>
 </html>
