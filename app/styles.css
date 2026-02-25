@@ -19,7 +19,7 @@ body {
 }
 
 .page {
-  width: min(1500px, 98vw);
+  width: min(1280px, 96vw);
   margin: 28px auto 40px;
 }
 
@@ -166,7 +166,7 @@ body {
 
 .step-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(560px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
   gap: 10px;
 }
 
@@ -196,7 +196,7 @@ body {
 
 .step-row.two-col {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(130px, auto);
+  grid-template-columns: minmax(130px, auto) minmax(0, 1fr);
   gap: 10px;
   align-items: center;
 }
@@ -207,9 +207,25 @@ body {
   min-width: 0;
 }
 
-.step-row.two-col p:first-child {
+.step-row.two-col p {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.step-row.owner-row .owner-value {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+.step-card.long-owner {
+  grid-column: 1 / -1;
+}
+
+.step-card.long-owner .step-row.owner-row {
+  grid-template-columns: minmax(110px, auto) minmax(0, 1fr);
 }
 
 .date-edit {

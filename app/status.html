@@ -507,16 +507,19 @@
       }
 
       function renderStep(section, name, step, idx) {
+        const ownerText = String(step.owner || step.Owner || 'Not assigned');
+        const ownerIsLong = ownerText.length > 62;
+        const cardClass = ownerIsLong ? 'step-card long-owner' : 'step-card';
         const extras = (step.extras || [])
           .map((x) => `<p><span class="label">${esc(x.label)}:</span> <span class="value">${esc(x.value || 'Not set')}</span></p>`)
           .join('');
 
-        return `<section class="step-card">
+        return `<section class="${cardClass}">
           <h3>${esc(name)}</h3>
           <div class="step-fields">
-            <div class="step-row two-col">
+            <div class="step-row two-col owner-row">
               <p><span class="label">Status:</span> <span class="value status-pill ${esc(step.status_class || 'status-pill-neutral')}">${esc(step.status || 'Not set')}</span></p>
-              <p><span class="label">Owner:</span> <span class="value">${esc(step.owner || step.Owner || 'Not assigned')}</span></p>
+              <p><span class="label">Owner:</span> <span class="value owner-value">${esc(ownerText)}</span></p>
             </div>
             <div class="step-row two-col">
               ${makeDateField(section, idx, 'ecd', step.ecd || {})}
