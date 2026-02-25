@@ -489,31 +489,41 @@ body {
 
 .admin-table th:nth-child(2),
 .admin-table td:nth-child(2) {
-  width: 110px;
+  width: 95px;
   text-align: center;
+  white-space: nowrap;
 }
 
 .admin-table th:nth-child(3),
 .admin-table td:nth-child(3) {
-  width: 210px;
+  width: 170px;
   text-align: left;
+  white-space: nowrap;
 }
 
 .admin-table th:nth-child(4),
 .admin-table td:nth-child(4) {
-  width: 160px;
-  text-align: center;
+  width: 120px;
+  text-align: left;
+  white-space: nowrap;
 }
 
 .admin-table th:nth-child(5),
 .admin-table td:nth-child(5) {
-  width: 125px;
-  text-align: right;
+  width: 135px;
+  text-align: center;
   white-space: nowrap;
 }
 
 .admin-table th:nth-child(6),
 .admin-table td:nth-child(6) {
+  width: 125px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.admin-table th:nth-child(7),
+.admin-table td:nth-child(7) {
   width: 135px;
   text-align: right;
   white-space: nowrap;

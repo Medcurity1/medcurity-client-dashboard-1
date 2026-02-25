@@ -70,6 +70,13 @@
 
       function esc(v) { return String(v || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])); }
       function norm(v) { return String(v || '').trim().toLowerCase(); }
+      function displayStatus(v) {
+        return String(v || '')
+          .split(' ')
+          .filter(Boolean)
+          .map((s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())
+          .join(' ');
+      }
 
       function parseUS(value) {
         const m = String(value || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
@@ -207,7 +214,7 @@
       function buildSummary(hostId, rows) {
         const counts = {};
         rows.forEach((row) => {
-          const s = row.task_status || 'Unknown';
+          const s = displayStatus(row.task_status || 'Unknown');
           counts[s] = (counts[s] || 0) + 1;
         });
         const host = document.getElementById(hostId);
@@ -240,7 +247,7 @@
               <td>${esc(p.sf_id)}</td>
               <td>${esc(p.project_lead || 'Not assigned')}</td>
               <td>${esc(p.project_support || '-')}</td>
-              <td>${esc(p.task_status || '')}</td>
+              <td>${esc(displayStatus(p.task_status || ''))}</td>
               <td>${esc(p._startLabel || '-')}</td>
               <td>${esc(p._completedLabel || '-')}</td>
             </tr>`;
