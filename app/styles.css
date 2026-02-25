@@ -202,8 +202,8 @@ body {
 }
 
 .step-row.owner-row {
-  grid-template-columns: minmax(170px, 210px) minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
 }
 
 .step-row.two-col p {
@@ -220,14 +220,14 @@ body {
   white-space: nowrap;
 }
 
-.step-card.owner-adjust .step-row.owner-row {
-  grid-template-columns: minmax(145px, 180px) minmax(0, 1fr);
-  gap: 20px;
-}
-
 .step-card.owner-compact .owner-value {
   font-size: 13px;
   letter-spacing: -0.1px;
+}
+
+.step-card.owner-tight .owner-value {
+  font-size: 12.5px;
+  letter-spacing: -0.15px;
 }
 
 .date-edit {

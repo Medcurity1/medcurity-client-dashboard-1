@@ -530,15 +530,36 @@
 
       function applyOwnerFit() {
         document.querySelectorAll('.step-card').forEach((card) => {
-          card.classList.remove('owner-adjust', 'owner-compact');
+          card.classList.remove('owner-compact', 'owner-tight');
+          const ownerRow = card.querySelector('.owner-row');
           const ownerValue = card.querySelector('.owner-value');
-          if (!ownerValue) return;
+          if (!ownerRow || !ownerValue) return;
 
-          if (ownerValue.scrollWidth > ownerValue.clientWidth + 2) {
-            card.classList.add('owner-adjust');
-            const ownerValue2 = card.querySelector('.owner-value');
-            if (ownerValue2 && ownerValue2.scrollWidth > ownerValue2.clientWidth + 2) {
-              card.classList.add('owner-compact');
+          ownerRow.style.gridTemplateColumns = '';
+          const overflow = ownerValue.scrollWidth - ownerValue.clientWidth;
+          if (overflow <= 1) return;
+
+          const rowWidth = ownerRow.clientWidth || 0;
+          const gap = parseFloat(window.getComputedStyle(ownerRow).columnGap || '10') || 10;
+          const baseLeft = (rowWidth - gap) / 2;
+          const maxShift = Math.max(0, baseLeft - 140);
+          const shift = Math.min(maxShift, overflow + 8);
+          let left = Math.round(baseLeft - shift);
+          ownerRow.style.gridTemplateColumns = `${left}px minmax(0, 1fr)`;
+
+          let overflowAfterShift = ownerValue.scrollWidth - ownerValue.clientWidth;
+          if (overflowAfterShift > 1 && left > 120) {
+            const extraShift = Math.min(left - 120, overflowAfterShift + 4);
+            left = Math.round(left - extraShift);
+            ownerRow.style.gridTemplateColumns = `${left}px minmax(0, 1fr)`;
+            overflowAfterShift = ownerValue.scrollWidth - ownerValue.clientWidth;
+          }
+
+          if (overflowAfterShift > 1) {
+            card.classList.add('owner-compact');
+            const overflowCompact = ownerValue.scrollWidth - ownerValue.clientWidth;
+            if (overflowCompact > 1) {
+              card.classList.add('owner-tight');
             }
           }
         });
