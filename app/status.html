@@ -528,6 +528,22 @@
         </section>`;
       }
 
+      function applyOwnerFit() {
+        document.querySelectorAll('.step-card').forEach((card) => {
+          card.classList.remove('owner-adjust', 'owner-compact');
+          const ownerValue = card.querySelector('.owner-value');
+          if (!ownerValue) return;
+
+          if (ownerValue.scrollWidth > ownerValue.clientWidth + 2) {
+            card.classList.add('owner-adjust');
+            const ownerValue2 = card.querySelector('.owner-value');
+            if (ownerValue2 && ownerValue2.scrollWidth > ownerValue2.clientWidth + 2) {
+              card.classList.add('owner-compact');
+            }
+          }
+        });
+      }
+
       async function loadPage() {
         if (!sfId || !sig) {
           document.body.innerHTML = '<main class="page"><section class="panel"><h2>Missing sf_id or sig.</h2></section></main>';
@@ -574,6 +590,9 @@
           document.getElementById('nvaSteps').innerHTML = Object.entries(nva).map(([name, step], idx) => renderStep('nva', name, step, idx)).join('');
         }
 
+        applyOwnerFit();
+        window.requestAnimationFrame(applyOwnerFit);
+
         const extra = dashboard.extra_metrics || {};
         if (Object.keys(extra).length) {
           document.getElementById('extraPanel').style.display = '';
@@ -604,6 +623,7 @@
       loadPage().catch((err) => {
         document.body.innerHTML = `<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(err.message || err)}</p></section></main>`;
       });
+      window.addEventListener('resize', applyOwnerFit);
     </script>
   </body>
 </html>

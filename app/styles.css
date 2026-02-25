@@ -19,7 +19,7 @@ body {
 }
 
 .page {
-  width: min(1560px, 98vw);
+  width: min(1440px, 97vw);
   margin: 28px auto 40px;
 }
 
@@ -166,7 +166,7 @@ body {
 
 .step-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(620px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(560px, 1fr));
   gap: 10px;
 }
 
@@ -201,6 +201,11 @@ body {
   align-items: center;
 }
 
+.step-row.owner-row {
+  grid-template-columns: minmax(170px, 210px) minmax(0, 1fr);
+  gap: 18px;
+}
+
 .step-row.two-col p {
   margin: 0;
   white-space: nowrap;
@@ -213,6 +218,16 @@ body {
 
 .step-row.owner-row p:last-child {
   white-space: nowrap;
+}
+
+.step-card.owner-adjust .step-row.owner-row {
+  grid-template-columns: minmax(145px, 180px) minmax(0, 1fr);
+  gap: 20px;
+}
+
+.step-card.owner-compact .owner-value {
+  font-size: 13px;
+  letter-spacing: -0.1px;
 }
 
 .date-edit {
