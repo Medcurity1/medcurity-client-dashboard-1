@@ -233,15 +233,66 @@
         return touched;
       }
 
+      function collectFollowingEcdSnapshot(dashboard, acdMetricKey) {
+        const parts = String(acdMetricKey || '').split('.');
+        if (parts.length !== 3) return {};
+        const sectionKey = parts[0] === 'sra' ? 'sra_steps' : parts[0] === 'nva' ? 'nva_steps' : '';
+        if (!sectionKey) return {};
+
+        const entries = Object.entries(dashboard?.[sectionKey] || {});
+        const idx = entries.findIndex(([, step]) => {
+          const metric = String(step?.acd?.metric_key || '');
+          return metric === acdMetricKey || metric === acdMetricKey.replace(/\.acd$/i, '.date') || metric === acdMetricKey.replace(/\.date$/i, '.acd');
+        });
+        if (idx < 0) return {};
+
+        const keep = {};
+        for (let i = idx + 1; i < entries.length; i += 1) {
+          const step = entries[i][1];
+          const ecdKey = String(step?.ecd?.metric_key || '');
+          if (!ecdKey) continue;
+          const ecdVal = String(step?.ecd?.value || '').trim();
+          // null means explicitly keep blank.
+          keep[ecdKey] = ecdVal && ecdVal.toLowerCase() !== 'not set' ? ecdVal : null;
+        }
+        return keep;
+      }
+
+      function clearFollowingEcdOverrides(dashboard, acdMetricKey, overrides) {
+        const parts = String(acdMetricKey || '').split('.');
+        if (parts.length !== 3) return;
+        const sectionKey = parts[0] === 'sra' ? 'sra_steps' : parts[0] === 'nva' ? 'nva_steps' : '';
+        if (!sectionKey) return;
+
+        const entries = Object.entries(dashboard?.[sectionKey] || {});
+        const idx = entries.findIndex(([, step]) => {
+          const metric = String(step?.acd?.metric_key || '');
+          return metric === acdMetricKey || metric === acdMetricKey.replace(/\.acd$/i, '.date') || metric === acdMetricKey.replace(/\.date$/i, '.acd');
+        });
+        if (idx < 0) return;
+
+        for (let i = idx + 1; i < entries.length; i += 1) {
+          const step = entries[i][1];
+          const ecdKey = String(step?.ecd?.metric_key || '');
+          if (ecdKey && Object.prototype.hasOwnProperty.call(overrides, ecdKey)) {
+            delete overrides[ecdKey];
+          }
+        }
+      }
+
       function applyStoredEcdOverrides(dashboard, overrides) {
         const map = overrides || {};
         for (const section of ['sra_steps', 'nva_steps']) {
           for (const step of Object.values(dashboard?.[section] || {})) {
             const key = String(step?.ecd?.metric_key || '');
             if (!key) continue;
-            const saved = String(map[key] || '').trim();
-            if (!saved) continue;
-            applyEcdValue(step, saved);
+            if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
+            const raw = map[key];
+            if (raw === null || String(raw || '').trim() === '') {
+              applyEcdValue(step, '');
+              continue;
+            }
+            applyEcdValue(step, String(raw).trim());
           }
         }
         recalcStatuses(dashboard);
@@ -323,6 +374,16 @@
         const row = form ? form.querySelector('.date-inline') : null;
         if (!form || !row) return;
         try {
+          if (currentDashboard) {
+            const overrides = loadEcdOverrides();
+            if (adjustFollowing) {
+              clearFollowingEcdOverrides(currentDashboard, form.dataset.metricKey || '', overrides);
+            } else {
+              const snapshot = collectFollowingEcdSnapshot(currentDashboard, form.dataset.metricKey || '');
+              Object.assign(overrides, snapshot);
+            }
+            saveEcdOverrides(overrides);
+          }
           await sendUpdate(form, adjustFollowing);
           location.reload();
         } catch (err) {
