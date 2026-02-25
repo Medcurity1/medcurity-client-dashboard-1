@@ -66,6 +66,243 @@ function toInputDate(dateUS) {
   return `${m[3]}-${m[1]}-${m[2]}`;
 }
 
+function shiftToMondayIfWeekend(d) {
+  const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const wd = out.getDay();
+  if (wd === 6) out.setDate(out.getDate() + 2);
+  if (wd === 0) out.setDate(out.getDate() + 1);
+  return out;
+}
+
+function shiftToFridayIfWeekend(d) {
+  const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const wd = out.getDay();
+  if (wd === 6) out.setDate(out.getDate() - 1);
+  if (wd === 0) out.setDate(out.getDate() - 2);
+  return out;
+}
+
+function nextBusinessDay(d) {
+  const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  out.setDate(out.getDate() + 1);
+  return shiftToMondayIfWeekend(out);
+}
+
+function addDays(d, days) {
+  const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  out.setDate(out.getDate() + days);
+  return out;
+}
+
+function parseMetricDate(v) {
+  const dt = parseAnyUSDate(v);
+  if (!dt) return null;
+  return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+}
+
+function findStepNameBySlug(stepMap, slug) {
+  return Object.keys(stepMap).find((name) => String(stepMap[name]?.step_slug || '') === slug) || null;
+}
+
+function anchorDateForSlug(stepMap, slug) {
+  const name = findStepNameBySlug(stepMap, slug);
+  if (!name) return null;
+  const step = stepMap[name] || {};
+  return parseMetricDate(step.ACD) || parseMetricDate(step.ECD);
+}
+
+function setEcdFromDateIfBlank(stepMap, slug, anchorDate, days) {
+  const name = findStepNameBySlug(stepMap, slug);
+  if (!name || !anchorDate) return;
+  const step = stepMap[name];
+  if (String(step.ECD || '').trim()) return;
+  const candidate = shiftToMondayIfWeekend(addDays(anchorDate, days));
+  step.ECD = formatUSDate(candidate);
+}
+
+function setEcdIfBlank(stepMap, slug, anchorSlug, days) {
+  const anchor = anchorDateForSlug(stepMap, anchorSlug);
+  setEcdFromDateIfBlank(stepMap, slug, anchor, days);
+}
+
+function shiftBusinessSafe(value, deltaDays) {
+  const shifted = addDays(value, deltaDays);
+  if (deltaDays < 0) return shiftToFridayIfWeekend(shifted);
+  return shiftToMondayIfWeekend(shifted);
+}
+
+function addEcdAcdFields(stepMap, offsets) {
+  const kickoffName = Object.keys(stepMap).find((n) => String(stepMap[n]?.step_slug || '').includes('kickoff')) || null;
+  const kickoffSlug = kickoffName ? String(stepMap[kickoffName]?.step_slug || '') : '';
+  if (kickoffName) {
+    const kickoff = stepMap[kickoffName];
+    kickoff.ECD = kickoff.ACD || '';
+    kickoff.ecd.editable = false;
+  }
+
+  // SRA explicit rules
+  setEcdIfBlank(stepMap, 'receive_policies_and_procedures_baa', 'sra_kickoff', 7);
+  setEcdIfBlank(stepMap, 'review_policies_and_procedures_baa', 'receive_policies_and_procedures_baa', 12);
+  setEcdIfBlank(stepMap, 'schedule_onsite_remote_interview', 'sra_kickoff', 14);
+
+  const goName = findStepNameBySlug(stepMap, 'go_onsite_have_interview');
+  if (goName) {
+    const goStep = stepMap[goName];
+    const goAcd = parseMetricDate(goStep.ACD);
+    if (goAcd) goStep.ECD = formatUSDate(goAcd);
+    else setEcdIfBlank(stepMap, 'go_onsite_have_interview', 'review_policies_and_procedures_baa', 7);
+  }
+
+  setEcdIfBlank(stepMap, 'recieve_requested_follow_up_documentation', 'go_onsite_have_interview', 14);
+  setEcdIfBlank(stepMap, 'schedule_final_sra_report', 'go_onsite_have_interview', 14);
+
+  const reviewName = findStepNameBySlug(stepMap, 'review_sra');
+  if (reviewName) {
+    const review = stepMap[reviewName];
+    if (!String(review.ECD || '').trim()) {
+      const presentName = findStepNameBySlug(stepMap, 'present_final_sra_report');
+      const presentAcd = presentName ? parseMetricDate(stepMap[presentName]?.ACD) : null;
+      if (presentAcd) {
+        review.ECD = formatUSDate(shiftToFridayIfWeekend(addDays(presentAcd, -1)));
+      } else {
+        const goAnchor = anchorDateForSlug(stepMap, 'go_onsite_have_interview');
+        if (goAnchor) {
+          let proposed = shiftToMondayIfWeekend(addDays(goAnchor, 15));
+          const siblings = [];
+          const receiveName = findStepNameBySlug(stepMap, 'recieve_requested_follow_up_documentation');
+          const scheduleName = findStepNameBySlug(stepMap, 'schedule_final_sra_report');
+          if (receiveName) {
+            const d = parseMetricDate(stepMap[receiveName]?.ECD);
+            if (d) siblings.push(d);
+          }
+          if (scheduleName) {
+            const d = parseMetricDate(stepMap[scheduleName]?.ECD);
+            if (d) siblings.push(d);
+          }
+          if (siblings.length) {
+            const latest = siblings.reduce((a, b) => (a > b ? a : b));
+            if (proposed <= latest) proposed = nextBusinessDay(latest);
+          }
+          review.ECD = formatUSDate(proposed);
+        }
+      }
+    }
+  }
+
+  const presentSraName = findStepNameBySlug(stepMap, 'present_final_sra_report');
+  if (presentSraName) {
+    const present = stepMap[presentSraName];
+    if (!String(present.ECD || '').trim()) {
+      const presentAcd = parseMetricDate(present.ACD);
+      if (presentAcd) present.ECD = formatUSDate(presentAcd);
+      else {
+        const reviewTitle = findStepNameBySlug(stepMap, 'review_sra');
+        const reviewEcd = reviewTitle ? parseMetricDate(stepMap[reviewTitle]?.ECD) : null;
+        const reviewAcd = reviewTitle ? parseMetricDate(stepMap[reviewTitle]?.ACD) : null;
+        let reviewAnchor = reviewEcd;
+        if (reviewAcd && (!reviewEcd || reviewAcd > reviewEcd)) reviewAnchor = reviewAcd;
+        if (reviewAnchor) {
+          let candidate = shiftToMondayIfWeekend(addDays(reviewAnchor, 7));
+          const prereqSlugs = ['recieve_requested_follow_up_documentation', 'schedule_final_sra_report', 'review_sra'];
+          const prereqDates = prereqSlugs.map((s) => anchorDateForSlug(stepMap, s)).filter(Boolean);
+          if (prereqDates.length) {
+            const minAllowed = prereqDates.reduce((a, b) => (a > b ? a : b));
+            if (candidate <= minAllowed) candidate = nextBusinessDay(minAllowed);
+          }
+          present.ECD = formatUSDate(candidate);
+        }
+      }
+    }
+  }
+
+  // NVA explicit rules
+  setEcdIfBlank(stepMap, 'receive_credentials', 'nva_kickoff', 7);
+  setEcdIfBlank(stepMap, 'verify_access', 'receive_credentials', 7);
+
+  const scansName = findStepNameBySlug(stepMap, 'scans_complete');
+  if (scansName) {
+    const scans = stepMap[scansName];
+    if (!String(scans.ECD || '').trim()) {
+      const receiveName = findStepNameBySlug(stepMap, 'receive_credentials');
+      const verifyName = findStepNameBySlug(stepMap, 'verify_access');
+      const receiveAcd = receiveName ? parseMetricDate(stepMap[receiveName]?.ACD) : null;
+      const verifyAcd = verifyName ? parseMetricDate(stepMap[verifyName]?.ACD) : null;
+      if (!receiveAcd || !verifyAcd) {
+        const kickoffAnchor = anchorDateForSlug(stepMap, 'nva_kickoff');
+        setEcdFromDateIfBlank(stepMap, 'scans_complete', kickoffAnchor, 28);
+      } else {
+        const maxAcd = receiveAcd > verifyAcd ? receiveAcd : verifyAcd;
+        setEcdFromDateIfBlank(stepMap, 'scans_complete', maxAcd, 21);
+      }
+    }
+  }
+
+  const scansEcd = parseMetricDate(stepMap[scansName]?.ECD);
+  const scansAcd = parseMetricDate(stepMap[scansName]?.ACD);
+  const presentNvaName = findStepNameBySlug(stepMap, 'present_final_nva_report');
+  const presentNvaAcd = presentNvaName ? parseMetricDate(stepMap[presentNvaName]?.ACD) : null;
+
+  const compileName = findStepNameBySlug(stepMap, 'compile_report');
+  if (compileName) {
+    if (presentNvaAcd) stepMap[compileName].ECD = formatUSDate(shiftToFridayIfWeekend(addDays(presentNvaAcd, -1)));
+    else setEcdFromDateIfBlank(stepMap, 'compile_report', scansEcd, 7);
+  }
+
+  const accessName = findStepNameBySlug(stepMap, 'access_removed');
+  if (accessName) {
+    if (presentNvaAcd) stepMap[accessName].ECD = formatUSDate(shiftToFridayIfWeekend(addDays(presentNvaAcd, -1)));
+    else setEcdFromDateIfBlank(stepMap, 'access_removed', scansEcd, 5);
+  }
+
+  const scheduleNvaName = findStepNameBySlug(stepMap, 'schedule_final_nva_report');
+  if (scheduleNvaName) {
+    if (scansAcd) setEcdFromDateIfBlank(stepMap, 'schedule_final_nva_report', scansAcd, 21);
+    else setEcdFromDateIfBlank(stepMap, 'schedule_final_nva_report', scansEcd, 12);
+  }
+
+  if (presentNvaName) {
+    if (presentNvaAcd) stepMap[presentNvaName].ECD = formatUSDate(presentNvaAcd);
+    else setEcdFromDateIfBlank(stepMap, 'present_final_nva_report', scansEcd, 19);
+  }
+
+  // Fallback offset rules.
+  const explicit = new Set([
+    'receive_policies_and_procedures_baa',
+    'review_policies_and_procedures_baa',
+    'schedule_onsite_remote_interview',
+    'go_onsite_have_interview',
+    'recieve_requested_follow_up_documentation',
+    'review_sra',
+    'schedule_final_sra_report',
+    'present_final_sra_report',
+    'sra_kickoff',
+    'receive_credentials',
+    'verify_access',
+    'scans_complete',
+    'access_removed',
+    'compile_report',
+    'schedule_final_nva_report',
+    'present_final_nva_report',
+    'nva_kickoff',
+  ]);
+  for (const [slug, offset] of Object.entries(offsets || {})) {
+    if (explicit.has(slug)) continue;
+    if (kickoffSlug) setEcdIfBlank(stepMap, slug, kickoffSlug, offset);
+  }
+
+  // Status + data bindings
+  for (const step of Object.values(stepMap)) {
+    step.isKickoff = String(step.step_slug || '').includes('kickoff');
+    step.status = computeStepStatus(step);
+    step.status_class = statusClass(step.status);
+    step.ecd.value = step.ECD || 'Not set';
+    step.acd.value = step.ACD || 'Not set';
+    step.ecd.input_value = toInputDate(step.ECD);
+    step.acd.input_value = toInputDate(step.ACD);
+    if (!step.isKickoff) step.ecd.editable = true;
+  }
+}
+
 function parseAnyUSDate(value) {
   const text = String(value || '').trim();
   if (!text) return null;
@@ -353,17 +590,8 @@ function buildDashboard(row) {
     }
   }
 
-  function normalizeSteps(stepMap) {
-    Object.values(stepMap).forEach((step) => {
-      step.isKickoff = step.step_slug.includes('kickoff');
-      if (!step.ECD && step.isKickoff && step.ACD) step.ECD = step.ACD;
-      step.status = computeStepStatus(step);
-      step.status_class = statusClass(step.status);
-      step.ecd.value = step.ECD || 'Not set';
-      step.acd.value = step.ACD || 'Not set';
-      step.ecd.input_value = toInputDate(step.ECD);
-      step.acd.input_value = toInputDate(step.ACD);
-    });
+  function normalizeSteps(stepMap, offsets) {
+    addEcdAcdFields(stepMap, offsets);
     return stepMap;
   }
 
@@ -380,12 +608,56 @@ function buildDashboard(row) {
     return Object.fromEntries(entries);
   }
 
+  if (showSra && showNva) {
+    const sraKickoff = findStepNameBySlug(sraSteps, 'sra_kickoff');
+    const nvaKickoff = findStepNameBySlug(nvaSteps, 'nva_kickoff');
+    if (sraKickoff && nvaKickoff) {
+      const sraAcd = String(sraSteps[sraKickoff]?.ACD || '').trim();
+      if (sraAcd) nvaSteps[nvaKickoff].ACD = sraAcd;
+    }
+  }
+
+  const normalizedSra = normalizeSteps(sraSteps, {
+    receive_policies_and_procedures_baa: 7,
+    review_policies_and_procedures_baa: 19,
+    schedule_onsite_remote_interview: 14,
+    go_onsite_have_interview: 21,
+    recieve_requested_follow_up_documentation: 28,
+    review_sra: 35,
+    schedule_final_sra_report: 42,
+    present_final_sra_report: 49,
+  });
+
+  const normalizedNva = normalizeSteps(nvaSteps, {
+    receive_credentials: 7,
+    verify_access: 14,
+    scans_complete: 21,
+    access_removed: 28,
+    compile_report: 35,
+    schedule_final_nva_report: 42,
+    present_final_nva_report: 49,
+  });
+
+  // Keep Present Final NVA ECD aligned with Present Final SRA ECD.
+  const sraPresentName = findStepNameBySlug(normalizedSra, 'present_final_sra_report');
+  const nvaPresentName = findStepNameBySlug(normalizedNva, 'present_final_nva_report');
+  if (sraPresentName && nvaPresentName) {
+    const sraEcd = String(normalizedSra[sraPresentName]?.ECD || '').trim();
+    if (sraEcd) {
+      normalizedNva[nvaPresentName].ECD = sraEcd;
+      normalizedNva[nvaPresentName].ecd.value = sraEcd;
+      normalizedNva[nvaPresentName].ecd.input_value = toInputDate(sraEcd);
+      normalizedNva[nvaPresentName].status = computeStepStatus(normalizedNva[nvaPresentName]);
+      normalizedNva[nvaPresentName].status_class = statusClass(normalizedNva[nvaPresentName].status);
+    }
+  }
+
   return {
     project_details: projectDetails,
     show_sra: showSra,
     show_nva: showNva,
-    sra_steps: orderSteps(normalizeSteps(sraSteps), sraOrder),
-    nva_steps: orderSteps(normalizeSteps(nvaSteps), nvaOrder),
+    sra_steps: orderSteps(normalizedSra, sraOrder),
+    nva_steps: orderSteps(normalizedNva, nvaOrder),
     extra_metrics: {},
   };
 }
