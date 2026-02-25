@@ -427,6 +427,8 @@ app.http('projects', {
         source_updated_at: r.source_updated_at,
         task_created_at: r.task_created_at,
         task_closed_at: r.task_closed_at,
+        sra_final_date: getMetric(r.metrics || {}, 'sra.present_final_sra_report.date', 'sra.present_final_sra_report.acd'),
+        nva_final_date: getMetric(r.metrics || {}, 'nva.present_final_nva_report.date', 'nva.present_final_nva_report.acd'),
         project_lead: getMetric(r.metrics || {}, 'project.project_lead') || 'Not assigned',
         project_support: getMetric(r.metrics || {}, 'project.project_support') || '',
         link_sig: sign(r.sf_id),

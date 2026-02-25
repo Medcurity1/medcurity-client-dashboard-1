@@ -77,10 +77,74 @@
         return new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2]));
       }
 
+      function formatUS(d) {
+        if (!d || Number.isNaN(d.getTime())) return 'Unknown';
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return `${mm}/${dd}/${yyyy}`;
+      }
+
       function quarterLabel(d) {
         if (!d || Number.isNaN(d.getTime())) return 'No Date';
         const q = Math.floor(d.getMonth() / 3) + 1;
         return `${d.getFullYear()} Q${q}`;
+      }
+
+      function normalizeProjects(raw) {
+        const normalized = raw.map((p) => {
+          const status = String(p.task_status || '');
+          const isCompleted = norm(status) === 'completed';
+
+          const created = parseUS(p.task_created_at);
+          const closed = parseUS(p.task_closed_at);
+          const sourceUpdated = parseUS(p.source_updated_at);
+          const sraFinal = parseUS(p.sra_final_date);
+          const nvaFinal = parseUS(p.nva_final_date);
+          const milestoneAnchor = sraFinal && nvaFinal ? (sraFinal > nvaFinal ? sraFinal : nvaFinal) : (sraFinal || nvaFinal);
+
+          let anchor = null;
+          if (isCompleted) anchor = milestoneAnchor || closed || sourceUpdated;
+          else anchor = created || sourceUpdated;
+
+          return {
+            ...p,
+            _isCompleted: isCompleted,
+            _periodLabel: quarterLabel(anchor),
+            _startLabel: isCompleted ? '-' : (created ? formatUS(created) : 'Unknown'),
+            _completedLabel: isCompleted ? (anchor ? formatUS(anchor) : 'Unknown') : '-',
+          };
+        });
+
+        // Match old version temporary business rules.
+        normalized.forEach((p) => {
+          if (!p._isCompleted) return;
+          const nameKey = String(p.task_name || '').trim().toLowerCase();
+          if (nameKey === 'acs') {
+            p._periodLabel = '2026 Q1';
+            p._completedLabel = '01/14/2026';
+          } else if (p._periodLabel === '2026 Q1') {
+            p._periodLabel = '2025 Q4';
+            p._completedLabel = '12/31/2025';
+          }
+        });
+
+        normalized.forEach((p) => {
+          if (p._isCompleted) return;
+          const nameKey = String(p.task_name || '').trim().toLowerCase();
+          if (nameKey.includes('overlake arthritis') || nameKey === 'the rose') {
+            p._periodLabel = '2026 Q1';
+            p._startLabel = '01/01/2026';
+            return;
+          }
+          // Keep Yale unchanged; move active 2025 Q3/Q4 into 2026 Q1.
+          if ((p._periodLabel === '2025 Q4' || p._periodLabel === '2025 Q3') && !nameKey.includes('yale')) {
+            p._periodLabel = '2026 Q1';
+            p._startLabel = '01/01/2026';
+          }
+        });
+
+        return normalized;
       }
 
       function selected(groupId) {
@@ -147,8 +211,7 @@
       function renderGroupedTables(hostId, rows) {
         const grouped = {};
         rows.forEach((row) => {
-          const anchor = row._bucketDate;
-          const q = quarterLabel(anchor);
+          const q = row._periodLabel || 'No Date';
           if (!grouped[q]) grouped[q] = [];
           grouped[q].push(row);
         });
@@ -165,8 +228,8 @@
               <td>${esc(p.project_lead || 'Not assigned')}</td>
               <td>${esc(p.project_support || '-')}</td>
               <td>${esc(p.task_status || '')}</td>
-              <td>${esc(p.task_created_at || '-')}</td>
-              <td>${esc(p.task_closed_at || '-')}</td>
+              <td>${esc(p._startLabel || '-')}</td>
+              <td>${esc(p._completedLabel || '-')}</td>
             </tr>`;
           }).join('');
 
@@ -205,11 +268,8 @@
         const completed = [];
 
         filtered.forEach((p) => {
-          const isCompleted = norm(p.task_status) === 'completed';
-          const created = parseUS(p.task_created_at);
-          const closed = parseUS(p.task_closed_at);
-          const row = { ...p, _bucketDate: isCompleted ? (closed || created) : created };
-          if (isCompleted) completed.push(row); else active.push(row);
+          if (p._isCompleted) completed.push(p);
+          else active.push(p);
         });
 
         document.getElementById('activeHeader').textContent = `Active Projects (${active.length})`;
@@ -234,7 +294,7 @@
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.detail || data.error || `Load failed (${res.status})`);
 
-        projects = data.projects || [];
+        projects = normalizeProjects(data.projects || []);
         document.getElementById('countLabel').textContent = `${projects.length} clients`;
 
         const allStatuses = [...new Set(projects.map((p) => p.task_status).filter(Boolean))].sort();
