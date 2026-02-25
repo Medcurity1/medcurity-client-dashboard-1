@@ -166,7 +166,7 @@ body {
 
 .step-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(700px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(560px, 1fr));
   gap: 10px;
 }
 
@@ -174,7 +174,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 10px 12px;
-  overflow-x: visible;
+  overflow-x: hidden;
 }
 
 .step-card h3 {
@@ -196,7 +196,7 @@ body {
 
 .step-row.two-col {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(180px, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(130px, auto);
   gap: 10px;
   align-items: center;
 }
@@ -205,6 +205,11 @@ body {
   margin: 0;
   white-space: nowrap;
   min-width: 0;
+}
+
+.step-row.two-col p:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .date-edit {
