@@ -19,14 +19,14 @@ body {
 }
 
 .page {
-  width: min(1280px, 96vw);
+  width: min(1500px, 98vw);
   margin: 28px auto 40px;
 }
 
 .top {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 20px;
   margin-bottom: 14px;
 }
@@ -35,6 +35,7 @@ body {
   margin: 0;
   font-size: 28px;
   font-weight: 650;
+  white-space: nowrap;
 }
 
 .top p {
@@ -154,6 +155,7 @@ body {
   color: #1d4ed8;
   font-size: 12px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 .track h2 {
@@ -164,7 +166,7 @@ body {
 
 .step-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(700px, 1fr));
   gap: 10px;
 }
 
@@ -172,7 +174,7 @@ body {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 10px 12px;
-  overflow-x: auto;
+  overflow-x: visible;
 }
 
 .step-card h3 {
@@ -194,7 +196,7 @@ body {
 
 .step-row.two-col {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1.6fr) minmax(180px, 1fr);
   gap: 10px;
   align-items: center;
 }
@@ -202,6 +204,7 @@ body {
 .step-row.two-col p {
   margin: 0;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .date-edit {
