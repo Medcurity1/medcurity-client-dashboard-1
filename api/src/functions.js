@@ -1,5 +1,5 @@
 const { app } = require('@azure/functions');
-const { fetchListRows, updateCustomField } = require('../shared/clickup');
+const { fetchListRows, updateCustomField, fetchLatestTaskComment } = require('../shared/clickup');
 const { isAdmin, sign, parseUSDate, dateDiffBusinessDays, quarterLabel, parseFieldMap } = require('../shared/utils');
 const fs = require('fs');
 const path = require('path');
@@ -526,14 +526,17 @@ function buildDashboard(row) {
   const showSra = parseBool(getMetric(metrics, 'project.sra_enabled'));
   const showNva = parseBool(getMetric(metrics, 'project.nva_enabled'));
 
+  const projectLead = getMetric(metrics, 'project.project_lead') || 'Not assigned';
+  const projectSupport = getMetric(metrics, 'project.project_support');
   const projectDetails = {
     Status: titleCase(row.task_status),
-    'Project Lead': getMetric(metrics, 'project.project_lead') || 'Not assigned',
-    Location: location || 'Not set',
-    'Project Support': getMetric(metrics, 'project.project_support') || '',
-    'Next Steps': getMetric(metrics, 'project.next_steps') || 'Not set',
+    'Project Lead': projectLead,
   };
-  if (!projectDetails['Project Support']) delete projectDetails['Project Support'];
+  if (projectSupport && projectSupport.trim()) {
+    projectDetails['Project Support'] = projectSupport.trim();
+  }
+  projectDetails.Location = location || 'Not set';
+  projectDetails['Next Steps'] = getMetric(metrics, 'project.next_steps') || 'Not set';
 
   const sraSteps = {};
   const nvaSteps = {};
@@ -674,6 +677,15 @@ app.http('status', {
       const rows = await fetchListRows();
       const row = rows.find((r) => r.sf_id === sfId);
       if (!row) return json(404, { error: 'not_found' });
+      try {
+        const latestComment = await fetchLatestTaskComment(row.task_id);
+        if (latestComment) {
+          row.metrics = row.metrics || {};
+          row.metrics['project.next_steps'] = latestComment;
+        }
+      } catch (_) {
+        // Ignore comment-fetch failures and fall back to existing mapped field value.
+      }
       return json(200, { ...row, dashboard: buildDashboard(row) });
     } catch (err) {
       ctx.error(err);
