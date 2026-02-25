@@ -91,6 +91,12 @@
         return `${d.getFullYear()} Q${q}`;
       }
 
+      function quarterSortValue(label) {
+        const m = String(label || '').match(/^(\d{4}) Q([1-4])$/);
+        if (!m) return Number.MIN_SAFE_INTEGER;
+        return Number(m[1]) * 10 + Number(m[2]);
+      }
+
       function normalizeProjects(raw) {
         const normalized = raw.map((p) => {
           const status = String(p.task_status || '');
@@ -208,7 +214,7 @@
         host.innerHTML = Object.keys(counts).sort().map((name) => `<span class="summary-pill">${esc(name)}: ${counts[name]}</span>`).join('');
       }
 
-      function renderGroupedTables(hostId, rows) {
+      function renderGroupedTables(hostId, rows, mostRecentQuarterFirst = false) {
         const grouped = {};
         rows.forEach((row) => {
           const q = row._periodLabel || 'No Date';
@@ -216,10 +222,17 @@
           grouped[q].push(row);
         });
 
-        const keys = Object.keys(grouped).sort();
+        const keys = Object.keys(grouped).sort((a, b) => {
+          const av = quarterSortValue(a);
+          const bv = quarterSortValue(b);
+          if (av === Number.MIN_SAFE_INTEGER && bv === Number.MIN_SAFE_INTEGER) return String(a).localeCompare(String(b));
+          if (av === Number.MIN_SAFE_INTEGER) return 1;
+          if (bv === Number.MIN_SAFE_INTEGER) return -1;
+          return mostRecentQuarterFirst ? (bv - av) : (av - bv);
+        });
         const host = document.getElementById(hostId);
         host.innerHTML = keys.map((quarter) => {
-          const items = grouped[quarter];
+          const items = grouped[quarter].slice().sort((a, b) => String(a.task_name || '').localeCompare(String(b.task_name || ''), undefined, { sensitivity: 'base' }));
           const body = items.map((p) => {
             const link = `/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}&mode=admin&key=${encodeURIComponent(key)}`;
             return `<tr>
@@ -277,8 +290,8 @@
 
         buildSummary('activeSummary', active);
         buildSummary('completedSummary', completed);
-        renderGroupedTables('activeGroups', active);
-        renderGroupedTables('completedGroups', completed);
+        renderGroupedTables('activeGroups', active, false);
+        renderGroupedTables('completedGroups', completed, true);
 
         updateToggleLabel('statusFilterToggle', statuses, 'All statuses');
         updateToggleLabel('leadFilterToggle', leads, 'All project leads');
