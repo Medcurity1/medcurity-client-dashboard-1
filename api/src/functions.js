@@ -16,6 +16,29 @@ function getMetric(metrics, ...keys) {
   return '';
 }
 
+function metricKeyAliases(metricKey) {
+  const k = String(metricKey || '').trim();
+  if (!k) return [];
+  const out = new Set([k]);
+  out.add(k.replace('recieve_', 'receive_'));
+  out.add(k.replace('_baa', ''));
+  out.add(k.replace('have_interview', 'have_interviews'));
+  out.add(k.replace('have_interviews', 'have_interview'));
+  out.add(k.replace('onsite_remote', 'onsite_or_remote'));
+  out.add(k.replace(/\.date$/i, '.acd'));
+  out.add(k.replace(/\.acd$/i, '.date'));
+  return Array.from(out);
+}
+
+function resolveFieldId(fieldMap, metricKey) {
+  const aliases = metricKeyAliases(metricKey);
+  for (const key of aliases) {
+    const id = fieldMap[key];
+    if (id) return { key, id };
+  }
+  return null;
+}
+
 function titleCase(value) {
   return String(value || '')
     .replace(/[_-]/g, ' ')
@@ -153,6 +176,7 @@ function shiftBusinessSafe(value, deltaDays) {
 }
 
 function addEcdAcdFields(stepMap, offsets) {
+  const fieldMap = parseFieldMap();
   const kickoffName = Object.keys(stepMap).find((n) => String(stepMap[n]?.step_slug || '').includes('kickoff')) || null;
   const kickoffSlug = kickoffName ? String(stepMap[kickoffName]?.step_slug || '') : '';
   if (kickoffName) {
@@ -320,7 +344,9 @@ function addEcdAcdFields(stepMap, offsets) {
     step.acd.value = step.ACD || 'Not set';
     step.ecd.input_value = toInputDate(step.ECD);
     step.acd.input_value = toInputDate(step.ACD);
-    if (!step.isKickoff) step.ecd.editable = true;
+    if (!step.isKickoff) {
+      step.ecd.editable = !!resolveFieldId(fieldMap, step.ecd?.metric_key || '');
+    }
   }
 }
 
@@ -993,8 +1019,9 @@ app.http('update', {
       if (!row) return json(404, { error: 'status_not_found' });
 
       const fieldMap = parseFieldMap();
-      const fieldId = fieldMap[metricKey];
-      if (!fieldId) return json(400, { error: 'field_not_mapped' });
+      const resolved = resolveFieldId(fieldMap, metricKey);
+      const fieldId = resolved?.id;
+      if (!fieldId) return json(400, { error: 'field_not_mapped', metric_key: metricKey });
 
       const clickupValue = value ? toClickupMsFromYmd(value) : null;
       await updateCustomField(row.task_id, fieldId, clickupValue);
@@ -1041,7 +1068,8 @@ app.http('update', {
                 if (laterAcd) continue;
 
                 const laterEcdKey = `${section}.${laterSlug}.ecd`;
-                const laterFieldId = fieldMap[laterEcdKey];
+                const laterResolved = resolveFieldId(fieldMap, laterEcdKey);
+                const laterFieldId = laterResolved?.id;
                 const laterCurrent = parseAnyUSDate(row.metrics?.[laterEcdKey] || '');
                 if (!laterFieldId || !laterCurrent) continue;
 
