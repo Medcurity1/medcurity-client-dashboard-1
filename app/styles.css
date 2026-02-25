@@ -196,7 +196,7 @@ body {
 
 .step-row.two-col {
   display: grid;
-  grid-template-columns: minmax(130px, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 10px;
   align-items: center;
 }
@@ -225,7 +225,7 @@ body {
 }
 
 .step-card.long-owner .step-row.owner-row {
-  grid-template-columns: minmax(110px, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .date-edit {
