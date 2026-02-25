@@ -44,12 +44,28 @@
               </div>
             </div>
           </div>
+
+          <div class="status-multiselect" id="sourceFilterControl">
+            <button type="button" id="sourceFilterToggle" class="project-filter status-toggle" onclick="togglePanel('sourceFilterPanel')">All sources</button>
+            <div id="sourceFilterPanel" class="status-filter-panel" hidden>
+              <div id="sourceFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearGroup('sourceFilter')">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('sourceFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
       <section class="panel">
         <h2>Core Metrics</h2>
         <p class="admin-summary" id="coreSummary"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Data Quality</h2>
+        <p class="admin-summary" id="qualitySummary"></p>
       </section>
 
       <section class="panel">
@@ -77,6 +93,9 @@
               <th>Track</th>
               <th>Quarter</th>
               <th>Close Days</th>
+              <th>Source</th>
+              <th>Kickoff</th>
+              <th>Final</th>
             </tr>
           </thead>
           <tbody></tbody>
@@ -128,7 +147,8 @@
         const state = {
           search: (document.getElementById('metricSearch') || {}).value || '',
           quarters: selected('quarterFilter'),
-          tracks: selected('trackFilter')
+          tracks: selected('trackFilter'),
+          sources: selected('sourceFilter')
         };
         try { localStorage.setItem(FILTER_KEY, JSON.stringify(state)); } catch (_) {}
       }
@@ -148,11 +168,13 @@
         const query = norm((document.getElementById('metricSearch') || {}).value || '');
         const qFilter = selected('quarterFilter');
         const tFilter = selected('trackFilter');
+        const sFilter = selected('sourceFilter');
 
         const filtered = rows.filter((row) => {
-          if (query && !norm(`${row.company} ${row.track} ${row.quarter}`).includes(query)) return false;
+          if (query && !norm(`${row.company} ${row.track} ${row.quarter} ${row.source} ${row.sf_id || ''}`).includes(query)) return false;
           if (qFilter.length && !qFilter.includes(norm(row.quarter))) return false;
           if (tFilter.length && !tFilter.includes(norm(row.track))) return false;
+          if (sFilter.length && !sFilter.includes(norm(row.source))) return false;
           return true;
         });
 
@@ -163,12 +185,16 @@
           <td>${esc(row.track)}</td>
           <td>${esc(row.quarter)}</td>
           <td>${esc(row.days)}</td>
+          <td>${esc(row.source || '')}</td>
+          <td>${esc(row.kickoff_date || '')}</td>
+          <td>${esc(row.final_date || '')}</td>
         </tr>`).join('');
 
-        document.querySelector('#detailsTable tbody').innerHTML = body || '<tr><td colspan="4">No records</td></tr>';
+        document.querySelector('#detailsTable tbody').innerHTML = body || '<tr><td colspan="7">No records</td></tr>';
 
         updateToggleLabel('quarterFilterToggle', qFilter, 'All quarters');
         updateToggleLabel('trackFilterToggle', tFilter, 'All tracks');
+        updateToggleLabel('sourceFilterToggle', sFilter, 'All sources');
         saveFilters();
       }
 
@@ -199,15 +225,33 @@
           `Total Tracked Closures: ${summary.total_tracked_closures ?? 0}`,
           `Overall Avg Close Days: ${summary.avg_close_days ?? 'N/A'}`,
           `SRA Avg: ${summary.sra_avg_close_days ?? 'N/A'} (${summary.sra_count ?? 0})`,
-          `NVA Avg: ${summary.nva_avg_close_days ?? 'N/A'} (${summary.nva_count ?? 0})`
+          `NVA Avg: ${summary.nva_avg_close_days ?? 'N/A'} (${summary.nva_count ?? 0})`,
+          `Tracked Avg (<=${summary.tracked_max_days ?? 120}): ${summary.tracked_avg_days ?? 'N/A'} (${summary.tracked_count ?? 0})`,
+          `Outliers: ${summary.untracked_outlier_count ?? 0}`,
+          `Historical Rows: ${summary.historical_count ?? 0}`,
+          `Live Rows: ${summary.live_count ?? 0}`
+        ].map((x) => `<span class="summary-pill">${esc(x)}</span>`).join('');
+
+        const quality = data.live_quality || {};
+        document.getElementById('qualitySummary').innerHTML = [
+          `Completed ClickUp Projects: ${quality.completed_task_total ?? 0}`,
+          `With Valid Close Dates: ${quality.completed_task_with_valid_close ?? 0}`,
+          `Coverage: ${summary.coverage_pct ?? 'N/A'}%`,
+          `Missing Date Projects: ${quality.completed_task_missing_close_dates ?? 0}`,
+          `Missing Covered By Historical: ${quality.missing_covered_by_historical ?? 0}`,
+          `Missing Uncovered: ${quality.missing_uncovered ?? 0}`,
+          `Missing SRA Date Rows: ${quality.missing_sra_dates ?? 0}`,
+          `Missing NVA Date Rows: ${quality.missing_nva_dates ?? 0}`
         ].map((x) => `<span class="summary-pill">${esc(x)}</span>`).join('');
 
         renderQuarterTable(data.quarters || []);
 
         const allQuarters = [...new Set(rows.map((r) => r.quarter).filter(Boolean))].sort();
         const allTracks = [...new Set(rows.map((r) => r.track).filter(Boolean))].sort();
+        const allSources = [...new Set(rows.map((r) => r.source).filter(Boolean))].sort();
         buildFilterOptions('quarterFilter', allQuarters);
         buildFilterOptions('trackFilter', allTracks);
+        buildFilterOptions('sourceFilter', allSources);
 
         const saved = loadFilters();
         if (typeof saved.search === 'string') {
@@ -216,15 +260,17 @@
 
         const qSet = new Set(saved.quarters || []);
         const tSet = new Set(saved.tracks || []);
+        const sSet = new Set(saved.sources || []);
 
         document.querySelectorAll('#quarterFilter input[type="checkbox"]').forEach((x) => { x.checked = qSet.has(norm(x.value)); });
         document.querySelectorAll('#trackFilter input[type="checkbox"]').forEach((x) => { x.checked = tSet.has(norm(x.value)); });
+        document.querySelectorAll('#sourceFilter input[type="checkbox"]').forEach((x) => { x.checked = sSet.has(norm(x.value)); });
 
         renderRows();
       }
 
       document.addEventListener('click', (evt) => {
-        ['quarterFilterControl', 'trackFilterControl'].forEach((id) => {
+        ['quarterFilterControl', 'trackFilterControl', 'sourceFilterControl'].forEach((id) => {
           const box = document.getElementById(id);
           if (!box || box.contains(evt.target)) return;
           const panel = box.querySelector('.status-filter-panel');

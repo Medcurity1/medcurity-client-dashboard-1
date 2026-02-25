@@ -1,6 +1,8 @@
 const { app } = require('@azure/functions');
 const { fetchListRows, updateCustomField } = require('../shared/clickup');
 const { isAdmin, sign, parseUSDate, dateDiffBusinessDays, quarterLabel, parseFieldMap } = require('../shared/utils');
+const fs = require('fs');
+const path = require('path');
 
 function json(status, body) {
   return { status, jsonBody: body, headers: { 'Content-Type': 'application/json' } };
@@ -44,13 +46,186 @@ function statusClass(status) {
 function computeStepStatus(step) {
   if (step.ACD) return step.isKickoff ? 'Completed' : 'On Track';
   if (step.isKickoff) return 'Not Started';
-  return step.ECD ? 'On Track' : 'Not Started';
+  if (!step.ECD) return 'Not Started';
+
+  const ecd = parseUSDate(step.ECD);
+  if (!ecd) return 'Not Started';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const ecdDate = new Date(ecd.getFullYear(), ecd.getMonth(), ecd.getDate());
+  const diffMs = ecdDate.getTime() - today.getTime();
+  const diffDays = Math.ceil(diffMs / 86400000);
+  if (diffDays < 0) return 'Roadblock/Overage';
+  if (diffDays <= 3) return 'Potential Roadblock';
+  return 'On Track';
 }
 
 function toInputDate(dateUS) {
   const m = String(dateUS || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!m) return '';
   return `${m[3]}-${m[1]}-${m[2]}`;
+}
+
+function parseAnyUSDate(value) {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  const m = text.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (!m) return null;
+  let year = Number(m[3]);
+  if (year < 100) year += year >= 70 ? 1900 : 2000;
+  const month = Number(m[1]);
+  const day = Number(m[2]);
+  const dt = new Date(year, month - 1, day);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
+function formatUSDate(d) {
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  return `${mm}/${dd}/${yyyy}`;
+}
+
+function quarterFromDate(d) {
+  const q = Math.floor(d.getMonth() / 3) + 1;
+  return `${d.getFullYear()} Q${q}`;
+}
+
+function normalizeCompanyName(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\(remote\)/g, '')
+    .replace(/\(renewal\)/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseCsvRows(text) {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '"') {
+      if (inQuotes && text[i + 1] === '"') {
+        cell += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === ',' && !inQuotes) {
+      row.push(cell);
+      cell = '';
+    } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
+      if (ch === '\r' && text[i + 1] === '\n') i += 1;
+      row.push(cell);
+      cell = '';
+      rows.push(row);
+      row = [];
+    } else {
+      cell += ch;
+    }
+  }
+  if (cell.length || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function normalizeHeader(h) {
+  return String(h || '')
+    .replace(/\r/g, ' ')
+    .replace(/\n/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+let historicalCache = null;
+let historicalCacheMtime = 0;
+function loadHistoricalRows() {
+  const csvPath = path.join(__dirname, '..', 'data', 'closed-projects.csv');
+  if (!fs.existsSync(csvPath)) return [];
+  const stat = fs.statSync(csvPath);
+  if (historicalCache && historicalCacheMtime === stat.mtimeMs) return historicalCache;
+
+  const raw = fs.readFileSync(csvPath, 'utf8');
+  const csvRows = parseCsvRows(raw);
+  if (!csvRows.length) return [];
+
+  let headerIdx = -1;
+  for (let i = 0; i < csvRows.length; i += 1) {
+    const normalized = csvRows[i].map(normalizeHeader);
+    if (normalized.includes('company') && normalized.includes('total days')) {
+      headerIdx = i;
+      break;
+    }
+  }
+  if (headerIdx < 0) return [];
+
+  const headers = csvRows[headerIdx];
+  const keyToIdx = new Map();
+  headers.forEach((h, idx) => keyToIdx.set(normalizeHeader(h), idx));
+  const idxCompany = keyToIdx.get('company');
+  const idxSfId = keyToIdx.get('sf id');
+  const idxTotalDays = keyToIdx.get('total days');
+  const idxSraKickoff = keyToIdx.get('sra kickoff (sra)');
+  const idxSraFinal = keyToIdx.get('present final sra report (sra)');
+  const idxNvaKickoff = keyToIdx.get('nva kickoff (nva)');
+  const idxNvaFinal = keyToIdx.get('present final nva report (nva)');
+  if (idxCompany == null || idxTotalDays == null) return [];
+
+  const out = [];
+  let currentQuarter = '';
+  for (let i = headerIdx + 1; i < csvRows.length; i += 1) {
+    const row = csvRows[i];
+    const company = String(row[idxCompany] || '').trim();
+    if (!company) continue;
+    const qMatch = company.match(/^Q([1-4])\s+(\d{4})$/i);
+    if (qMatch) {
+      currentQuarter = `${qMatch[2]} Q${qMatch[1]}`;
+      continue;
+    }
+    const companyLower = company.toLowerCase();
+    if (companyLower.startsWith('totals') || companyLower.startsWith('202')) continue;
+
+    const totalDaysText = String(row[idxTotalDays] || '').replace(/,/g, '');
+    const daysMatch = totalDaysText.match(/-?\d+/);
+    if (!daysMatch) continue;
+    const totalDays = Number(daysMatch[0]);
+    if (!Number.isFinite(totalDays) || totalDays <= 0) continue;
+
+    const sraKickoff = parseAnyUSDate(idxSraKickoff != null ? row[idxSraKickoff] : '');
+    const sraFinal = parseAnyUSDate(idxSraFinal != null ? row[idxSraFinal] : '');
+    const nvaKickoff = parseAnyUSDate(idxNvaKickoff != null ? row[idxNvaKickoff] : '');
+    const nvaFinal = parseAnyUSDate(idxNvaFinal != null ? row[idxNvaFinal] : '');
+    const final = sraFinal || nvaFinal;
+    if (!final) continue;
+
+    let track = 'Unknown';
+    if (sraFinal && nvaFinal) track = 'SRA+NVA';
+    else if (sraFinal) track = 'SRA';
+    else if (nvaFinal) track = 'NVA';
+
+    out.push({
+      source_key: `hist|${company}|${track}|${formatUSDate(final)}|${totalDays}`,
+      sf_id: idxSfId != null ? String(row[idxSfId] || '').trim() : '',
+      company,
+      track,
+      kickoff_date: sraKickoff ? formatUSDate(sraKickoff) : nvaKickoff ? formatUSDate(nvaKickoff) : '',
+      final_date: formatUSDate(final),
+      close_days: totalDays,
+      quarter_label: currentQuarter || quarterFromDate(final),
+      source: 'historical_csv',
+    });
+  }
+
+  historicalCache = out;
+  historicalCacheMtime = stat.mtimeMs;
+  return out;
 }
 
 function stepDisplayName(section, slug, location) {
@@ -274,68 +449,194 @@ app.http('metrics', {
         return json(401, { error: 'unauthorized' });
       }
       const rows = await fetchListRows();
+      const TRACKED_MAX_CLOSE_DAYS = 120;
       const completed = rows.filter((r) => String(r.task_status || '').toLowerCase() === 'completed');
-      const items = [];
+      const liveItems = [];
+      const missingRecords = [];
+      let missingSraDates = 0;
+      let missingNvaDates = 0;
+      let completedWithValidClose = 0;
+
       for (const r of completed) {
         const m = r.metrics || {};
-        const sraStart = parseUSDate(getMetric(m, 'sra.sra_kickoff.date', 'sra.sra_kickoff.acd'));
-        const sraEnd = parseUSDate(getMetric(m, 'sra.present_final_sra_report.date', 'sra.present_final_sra_report.acd'));
+        let hasValid = false;
+
+        const sraStart = parseAnyUSDate(getMetric(m, 'sra.sra_kickoff.date', 'sra.sra_kickoff.acd'));
+        const sraEnd = parseAnyUSDate(getMetric(m, 'sra.present_final_sra_report.date', 'sra.present_final_sra_report.acd'));
         const sraDays = dateDiffBusinessDays(sraStart, sraEnd);
-        if (sraDays) items.push({ company: r.task_name, track: 'SRA', days: sraDays, quarter: quarterLabel(sraEnd) });
+        const sraEnabled = parseBool(getMetric(m, 'project.sra_enabled', 'sra.enabled', 'sra_enabled'));
+        const sraRelevant = sraEnabled === true || Object.keys(m).some((k) => String(k).startsWith('sra.'));
+        if (sraDays) {
+          hasValid = true;
+          liveItems.push({
+            sf_id: r.sf_id || '',
+            company: r.task_name,
+            track: 'SRA',
+            kickoff_date: sraStart ? formatUSDate(sraStart) : '',
+            final_date: sraEnd ? formatUSDate(sraEnd) : '',
+            close_days: sraDays,
+            quarter_label: quarterLabel(sraEnd),
+            source: 'clickup_live',
+          });
+        } else if (sraRelevant) {
+          missingSraDates += 1;
+        }
 
-        const nvaStart = parseUSDate(getMetric(m, 'nva.nva_kickoff.date', 'nva.nva_kickoff.acd'));
-        const nvaEnd = parseUSDate(getMetric(m, 'nva.present_final_nva_report.date', 'nva.present_final_nva_report.acd'));
+        const nvaStart = parseAnyUSDate(getMetric(m, 'nva.nva_kickoff.date', 'nva.nva_kickoff.acd'));
+        const nvaEnd = parseAnyUSDate(getMetric(m, 'nva.present_final_nva_report.date', 'nva.present_final_nva_report.acd'));
         const nvaDays = dateDiffBusinessDays(nvaStart, nvaEnd);
-        if (nvaDays) items.push({ company: r.task_name, track: 'NVA', days: nvaDays, quarter: quarterLabel(nvaEnd) });
-      }
-      items.sort((a, b) => String(a.quarter).localeCompare(String(b.quarter)) || String(a.company).localeCompare(String(b.company)));
-      const sum = items.reduce((a, i) => a + i.days, 0);
-      const avg = items.length ? Math.round((sum / items.length) * 10) / 10 : null;
-      const byQuarter = {};
-      const sraItems = items.filter((i) => i.track === 'SRA');
-      const nvaItems = items.filter((i) => i.track === 'NVA');
-      const sraAvg = sraItems.length
-        ? Math.round((sraItems.reduce((a, i) => a + i.days, 0) / sraItems.length) * 10) / 10
-        : null;
-      const nvaAvg = nvaItems.length
-        ? Math.round((nvaItems.reduce((a, i) => a + i.days, 0) / nvaItems.length) * 10) / 10
-        : null;
+        const nvaEnabled = parseBool(getMetric(m, 'project.nva_enabled', 'nva.enabled', 'nva_enabled'));
+        const nvaRelevant = nvaEnabled === true || Object.keys(m).some((k) => String(k).startsWith('nva.'));
+        if (nvaDays) {
+          hasValid = true;
+          liveItems.push({
+            sf_id: r.sf_id || '',
+            company: r.task_name,
+            track: 'NVA',
+            kickoff_date: nvaStart ? formatUSDate(nvaStart) : '',
+            final_date: nvaEnd ? formatUSDate(nvaEnd) : '',
+            close_days: nvaDays,
+            quarter_label: quarterLabel(nvaEnd),
+            source: 'clickup_live',
+          });
+        } else if (nvaRelevant) {
+          missingNvaDates += 1;
+        }
 
-      for (const i of items) {
-        byQuarter[i.quarter] = byQuarter[i.quarter] || { count: 0, sum: 0, sraCount: 0, sraSum: 0, nvaCount: 0, nvaSum: 0 };
-        byQuarter[i.quarter].count += 1;
-        byQuarter[i.quarter].sum += i.days;
-        if (i.track === 'SRA') {
-          byQuarter[i.quarter].sraCount += 1;
-          byQuarter[i.quarter].sraSum += i.days;
-        }
-        if (i.track === 'NVA') {
-          byQuarter[i.quarter].nvaCount += 1;
-          byQuarter[i.quarter].nvaSum += i.days;
-        }
+        if (hasValid) completedWithValidClose += 1;
+        else missingRecords.push({ company: r.task_name || '', sf_id: r.sf_id || '' });
       }
-      const quarters = Object.entries(byQuarter)
-        .map(([quarter, v]) => ({
-          quarter,
-          count: v.count,
-          avg_close_days: Math.round((v.sum / v.count) * 10) / 10,
-          avg_sra_days: v.sraCount ? Math.round((v.sraSum / v.sraCount) * 10) / 10 : null,
-          avg_nva_days: v.nvaCount ? Math.round((v.nvaSum / v.nvaCount) * 10) / 10 : null,
-        }))
-        .sort((a, b) => a.quarter.localeCompare(b.quarter));
+
+      const historicalItems = loadHistoricalRows();
+      const historicalKeys = new Set(
+        historicalItems.map((r) => [
+          normalizeCompanyName(r.company),
+          String(r.track || '').toUpperCase(),
+          String(r.kickoff_date || '').trim(),
+          String(r.final_date || '').trim(),
+        ].join('|'))
+      );
+      const liveDeduped = liveItems.filter((r) => {
+        const key = [
+          normalizeCompanyName(r.company),
+          String(r.track || '').toUpperCase(),
+          String(r.kickoff_date || '').trim(),
+          String(r.final_date || '').trim(),
+        ].join('|');
+        return !historicalKeys.has(key);
+      });
+
+      const allRows = [...historicalItems, ...liveDeduped];
+      allRows.sort((a, b) => {
+        const ad = parseAnyUSDate(a.final_date);
+        const bd = parseAnyUSDate(b.final_date);
+        const at = ad ? ad.getTime() : 0;
+        const bt = bd ? bd.getTime() : 0;
+        return bt - at;
+      });
+
+      const allDays = allRows.map((r) => Number(r.close_days)).filter((n) => Number.isFinite(n) && n > 0);
+      const sraRows = allRows.filter((r) => String(r.track || '').toUpperCase().includes('SRA'));
+      const nvaRows = allRows.filter((r) => String(r.track || '').toUpperCase().includes('NVA'));
+      const sraDays = sraRows.map((r) => Number(r.close_days)).filter((n) => Number.isFinite(n) && n > 0);
+      const nvaDays = nvaRows.map((r) => Number(r.close_days)).filter((n) => Number.isFinite(n) && n > 0);
+      const trackedDays = allDays.filter((d) => d <= TRACKED_MAX_CLOSE_DAYS);
+      const avg = allDays.length ? Math.round((allDays.reduce((a, b) => a + b, 0) / allDays.length) * 10) / 10 : null;
+      const sraAvg = sraDays.length ? Math.round((sraDays.reduce((a, b) => a + b, 0) / sraDays.length) * 10) / 10 : null;
+      const nvaAvg = nvaDays.length ? Math.round((nvaDays.reduce((a, b) => a + b, 0) / nvaDays.length) * 10) / 10 : null;
+
+      const grouped = new Map();
+      for (const row of allRows) {
+        const q = String(row.quarter_label || '');
+        if (!grouped.has(q)) grouped.set(q, []);
+        grouped.get(q).push(Number(row.close_days));
+      }
+      const groupedSra = new Map();
+      for (const row of sraRows) {
+        const q = String(row.quarter_label || '');
+        if (!groupedSra.has(q)) groupedSra.set(q, []);
+        groupedSra.get(q).push(Number(row.close_days));
+      }
+      const groupedNva = new Map();
+      for (const row of nvaRows) {
+        const q = String(row.quarter_label || '');
+        if (!groupedNva.has(q)) groupedNva.set(q, []);
+        groupedNva.get(q).push(Number(row.close_days));
+      }
+      const quarterRows = Array.from(grouped.keys())
+        .sort((a, b) => {
+          const pa = String(a).match(/^(\d{4}) Q([1-4])$/);
+          const pb = String(b).match(/^(\d{4}) Q([1-4])$/);
+          if (!pa && !pb) return String(a).localeCompare(String(b));
+          if (!pa) return -1;
+          if (!pb) return 1;
+          if (pa[1] !== pb[1]) return Number(pa[1]) - Number(pb[1]);
+          return Number(pa[2]) - Number(pb[2]);
+        })
+        .map((q) => {
+          const vals = grouped.get(q) || [];
+          const sVals = groupedSra.get(q) || [];
+          const nVals = groupedNva.get(q) || [];
+          return {
+            quarter: q,
+            count: vals.length,
+            avg_close_days: vals.length ? Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10 : null,
+            avg_sra_days: sVals.length ? Math.round((sVals.reduce((a, b) => a + b, 0) / sVals.length) * 10) / 10 : null,
+            avg_nva_days: nVals.length ? Math.round((nVals.reduce((a, b) => a + b, 0) / nVals.length) * 10) / 10 : null,
+          };
+        });
+
+      const historicalCompanies = new Set(historicalItems.map((r) => normalizeCompanyName(r.company)).filter(Boolean));
+      const historicalSfIds = new Set(historicalItems.map((r) => String(r.sf_id || '').trim()).filter(Boolean));
+      let coveredByHistorical = 0;
+      let uncovered = 0;
+      for (const m of missingRecords) {
+        const company = String(m.company || '').trim();
+        const sf = String(m.sf_id || '').trim();
+        const covered = (sf && historicalSfIds.has(sf)) || historicalCompanies.has(normalizeCompanyName(company));
+        if (covered) coveredByHistorical += 1;
+        else uncovered += 1;
+      }
+
+      const liveQuality = {
+        completed_task_total: completed.length,
+        completed_task_with_valid_close: completedWithValidClose,
+        completed_task_missing_close_dates: Math.max(completed.length - completedWithValidClose, 0),
+        missing_sra_dates: missingSraDates,
+        missing_nva_dates: missingNvaDates,
+        missing_covered_by_historical: coveredByHistorical,
+        missing_uncovered: uncovered,
+      };
+      const coveragePct = completed.length ? Math.round((100 * completedWithValidClose / completed.length) * 10) / 10 : null;
+
       return json(200, {
-        total_tracked_closures: items.length,
-        avg_close_days: avg,
         summary: {
-          total_tracked_closures: items.length,
+          total_tracked_closures: allRows.length,
           avg_close_days: avg,
           sra_avg_close_days: sraAvg,
-          sra_count: sraItems.length,
+          sra_count: sraRows.length,
           nva_avg_close_days: nvaAvg,
-          nva_count: nvaItems.length,
+          nva_count: nvaRows.length,
+          tracked_avg_days: trackedDays.length ? Math.round((trackedDays.reduce((a, b) => a + b, 0) / trackedDays.length) * 10) / 10 : null,
+          tracked_count: trackedDays.length,
+          untracked_outlier_count: Math.max(allDays.length - trackedDays.length, 0),
+          tracked_max_days: TRACKED_MAX_CLOSE_DAYS,
+          historical_count: historicalItems.length,
+          live_count: liveDeduped.length,
+          coverage_pct: coveragePct,
         },
-        quarters,
-        rows: items,
+        live_quality: liveQuality,
+        quarters: quarterRows,
+        rows: allRows.map((r) => ({
+          company: r.company,
+          track: r.track,
+          quarter: r.quarter_label,
+          days: r.close_days,
+          source: r.source,
+          kickoff_date: r.kickoff_date,
+          final_date: r.final_date,
+          sf_id: r.sf_id || '',
+        })),
       });
     } catch (err) {
       ctx.error(err);
