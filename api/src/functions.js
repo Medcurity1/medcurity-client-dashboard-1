@@ -47,6 +47,12 @@ function computeStepStatus(step) {
   return step.ECD ? 'On Track' : 'Not Started';
 }
 
+function toInputDate(dateUS) {
+  const m = String(dateUS || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return '';
+  return `${m[3]}-${m[1]}-${m[2]}`;
+}
+
 function stepDisplayName(section, slug, location) {
   const loc = String(location || '').toLowerCase();
   const onsite = loc.includes('onsite');
@@ -119,6 +125,27 @@ function buildDashboard(row) {
 
   const sraSteps = {};
   const nvaSteps = {};
+  const sraOrder = [
+    'sra_kickoff',
+    'receive_policies_and_procedures_baa',
+    'review_policies_and_procedures_baa',
+    'schedule_onsite_remote_interview',
+    'go_onsite_have_interview',
+    'recieve_requested_follow_up_documentation',
+    'review_sra',
+    'schedule_final_sra_report',
+    'present_final_sra_report',
+  ];
+  const nvaOrder = [
+    'nva_kickoff',
+    'receive_credentials',
+    'verify_access',
+    'scans_complete',
+    'access_removed',
+    'compile_report',
+    'schedule_final_nva_report',
+    'present_final_nva_report',
+  ];
 
   for (const [key, value] of Object.entries(metrics)) {
     const parts = key.split('.');
@@ -135,7 +162,7 @@ function buildDashboard(row) {
       Owner: stepOwner(section, slug, row.task_name),
       ECD: '',
       ACD: '',
-      ecd: { editable: false, metric_key: `${section}.${slug}.ecd`, value: '', input_value: '' },
+      ecd: { editable: true, metric_key: `${section}.${slug}.ecd`, value: '', input_value: '' },
       acd: { editable: true, metric_key: `${section}.${slug}.date`, value: '', input_value: '' },
       extras: [],
       status_class: 'status-pill-neutral',
@@ -159,18 +186,31 @@ function buildDashboard(row) {
       step.status_class = statusClass(step.status);
       step.ecd.value = step.ECD || 'Not set';
       step.acd.value = step.ACD || 'Not set';
-      step.ecd.input_value = '';
-      step.acd.input_value = '';
+      step.ecd.input_value = toInputDate(step.ECD);
+      step.acd.input_value = toInputDate(step.ACD);
     });
     return stepMap;
+  }
+
+  function orderSteps(stepMap, order) {
+    const entries = Object.entries(stepMap);
+    entries.sort((a, b) => {
+      const ai = order.indexOf(a[1].step_slug);
+      const bi = order.indexOf(b[1].step_slug);
+      if (ai === -1 && bi === -1) return a[0].localeCompare(b[0]);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+    return Object.fromEntries(entries);
   }
 
   return {
     project_details: projectDetails,
     show_sra: showSra,
     show_nva: showNva,
-    sra_steps: normalizeSteps(sraSteps),
-    nva_steps: normalizeSteps(nvaSteps),
+    sra_steps: orderSteps(normalizeSteps(sraSteps), sraOrder),
+    nva_steps: orderSteps(normalizeSteps(nvaSteps), nvaOrder),
     extra_metrics: {},
   };
 }
@@ -248,18 +288,55 @@ app.http('metrics', {
         const nvaDays = dateDiffBusinessDays(nvaStart, nvaEnd);
         if (nvaDays) items.push({ company: r.task_name, track: 'NVA', days: nvaDays, quarter: quarterLabel(nvaEnd) });
       }
+      items.sort((a, b) => String(a.quarter).localeCompare(String(b.quarter)) || String(a.company).localeCompare(String(b.company)));
       const sum = items.reduce((a, i) => a + i.days, 0);
-      const avg = items.length ? Math.round((sum / items.length) * 10) / 10 : 0;
+      const avg = items.length ? Math.round((sum / items.length) * 10) / 10 : null;
       const byQuarter = {};
+      const sraItems = items.filter((i) => i.track === 'SRA');
+      const nvaItems = items.filter((i) => i.track === 'NVA');
+      const sraAvg = sraItems.length
+        ? Math.round((sraItems.reduce((a, i) => a + i.days, 0) / sraItems.length) * 10) / 10
+        : null;
+      const nvaAvg = nvaItems.length
+        ? Math.round((nvaItems.reduce((a, i) => a + i.days, 0) / nvaItems.length) * 10) / 10
+        : null;
+
       for (const i of items) {
-        byQuarter[i.quarter] = byQuarter[i.quarter] || { count: 0, sum: 0 };
+        byQuarter[i.quarter] = byQuarter[i.quarter] || { count: 0, sum: 0, sraCount: 0, sraSum: 0, nvaCount: 0, nvaSum: 0 };
         byQuarter[i.quarter].count += 1;
         byQuarter[i.quarter].sum += i.days;
+        if (i.track === 'SRA') {
+          byQuarter[i.quarter].sraCount += 1;
+          byQuarter[i.quarter].sraSum += i.days;
+        }
+        if (i.track === 'NVA') {
+          byQuarter[i.quarter].nvaCount += 1;
+          byQuarter[i.quarter].nvaSum += i.days;
+        }
       }
       const quarters = Object.entries(byQuarter)
-        .map(([quarter, v]) => ({ quarter, count: v.count, avg_close_days: Math.round((v.sum / v.count) * 10) / 10 }))
+        .map(([quarter, v]) => ({
+          quarter,
+          count: v.count,
+          avg_close_days: Math.round((v.sum / v.count) * 10) / 10,
+          avg_sra_days: v.sraCount ? Math.round((v.sraSum / v.sraCount) * 10) / 10 : null,
+          avg_nva_days: v.nvaCount ? Math.round((v.nvaSum / v.nvaCount) * 10) / 10 : null,
+        }))
         .sort((a, b) => a.quarter.localeCompare(b.quarter));
-      return json(200, { total_tracked_closures: items.length, avg_close_days: avg, quarters, rows: items });
+      return json(200, {
+        total_tracked_closures: items.length,
+        avg_close_days: avg,
+        summary: {
+          total_tracked_closures: items.length,
+          avg_close_days: avg,
+          sra_avg_close_days: sraAvg,
+          sra_count: sraItems.length,
+          nva_avg_close_days: nvaAvg,
+          nva_count: nvaItems.length,
+        },
+        quarters,
+        rows: items,
+      });
     } catch (err) {
       ctx.error(err);
       return json(500, { error: 'server_error', detail: String(err.message || err) });

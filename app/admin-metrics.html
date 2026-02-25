@@ -16,24 +16,54 @@
     <main class="page">
       <header class="top">
         <h1>Admin Metrics</h1>
-        <p id="countLabel">0 records</p>
+        <p id="countLabel">0 closed track records</p>
       </header>
 
       <section class="panel">
         <div class="admin-controls">
-          <input id="metricSearch" class="project-search" type="search" placeholder="Search by company..." oninput="renderTable()" />
+          <input id="metricSearch" class="project-search" type="search" placeholder="Search by company..." oninput="renderRows()" />
+
+          <div class="status-multiselect" id="quarterFilterControl">
+            <button type="button" id="quarterFilterToggle" class="project-filter status-toggle" onclick="togglePanel('quarterFilterPanel')">All quarters</button>
+            <div id="quarterFilterPanel" class="status-filter-panel" hidden>
+              <div id="quarterFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearGroup('quarterFilter')">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('quarterFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="status-multiselect" id="trackFilterControl">
+            <button type="button" id="trackFilterToggle" class="project-filter status-toggle" onclick="togglePanel('trackFilterPanel')">All tracks</button>
+            <div id="trackFilterPanel" class="status-filter-panel" hidden>
+              <div id="trackFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearGroup('trackFilter')">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('trackFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
       <section class="panel">
         <h2>Core Metrics</h2>
-        <p class="admin-summary" id="summary"></p>
+        <p class="admin-summary" id="coreSummary"></p>
       </section>
 
       <section class="panel">
         <h2>Average Close Days By Quarter</h2>
         <table class="admin-table" id="quarterTable">
-          <thead><tr><th>Quarter</th><th>Projects</th><th>Avg Close Days</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Quarter</th>
+              <th>Projects</th>
+              <th>Avg Close Days</th>
+              <th>SRA Avg</th>
+              <th>NVA Avg</th>
+            </tr>
+          </thead>
           <tbody></tbody>
         </table>
       </section>
@@ -41,32 +71,170 @@
       <section class="panel">
         <h2>Closed Record Details</h2>
         <table class="admin-table" id="detailsTable">
-          <thead><tr><th>Company</th><th>Track</th><th>Quarter</th><th>Close Days</th></tr></thead>
+          <thead>
+            <tr>
+              <th>Company</th>
+              <th>Track</th>
+              <th>Quarter</th>
+              <th>Close Days</th>
+            </tr>
+          </thead>
           <tbody></tbody>
         </table>
       </section>
     </main>
 
     <script>
-      const q=new URLSearchParams(location.search);const key=q.get('key')||'';
-      let rows=[];
-      function esc(v){return String(v||'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
-      function renderTable(){
-        const query=(document.getElementById('metricSearch').value||'').toLowerCase();
-        const filtered=rows.filter(r=>`${r.company} ${r.track} ${r.quarter}`.toLowerCase().includes(query));
-        document.getElementById('countLabel').textContent=`${filtered.length} records`;
-        document.querySelector('#detailsTable tbody').innerHTML=filtered.map(r=>`<tr><td>${esc(r.company)}</td><td>${esc(r.track)}</td><td>${esc(r.quarter)}</td><td>${esc(r.days)}</td></tr>`).join('')||'<tr><td colspan="4">No records</td></tr>';
+      const qp = new URLSearchParams(location.search);
+      const key = qp.get('key') || '';
+      const FILTER_KEY = 'medcurity_metrics_filters_v2';
+      let rows = [];
+
+      function esc(v) { return String(v || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])); }
+      function norm(v) { return String(v || '').trim().toLowerCase(); }
+
+      function togglePanel(id) {
+        const panel = document.getElementById(id);
+        if (!panel) return;
+        panel.hidden = !panel.hidden;
       }
-      async function load(){
-        document.getElementById('projectsLink').href=`/admin/projects?key=${encodeURIComponent(key)}`;
-        document.getElementById('metricsLink').href=`/admin/metrics?key=${encodeURIComponent(key)}`;
-        const res=await fetch(`/api/metrics?key=${encodeURIComponent(key)}`); const d=await res.json();
-        rows=d.rows||[];
-        document.getElementById('summary').innerHTML=`<span class="summary-pill">Tracked Closures: ${d.total_tracked_closures||0}</span><span class="summary-pill">Overall Avg Close Days: ${d.avg_close_days||0}</span>`;
-        document.querySelector('#quarterTable tbody').innerHTML=(d.quarters||[]).map(r=>`<tr><td>${esc(r.quarter)}</td><td>${esc(r.count)}</td><td>${esc(r.avg_close_days)}</td></tr>`).join('')||'<tr><td colspan="3">No quarter data</td></tr>';
-        renderTable();
+
+      function closePanel(id) {
+        const panel = document.getElementById(id);
+        if (panel) panel.hidden = true;
       }
-      load().catch(err=>{document.body.innerHTML=`<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(err.message||err)}</p></section></main>`;});
+
+      function selected(groupId) {
+        return Array.from(document.querySelectorAll(`#${groupId} input[type='checkbox']:checked`)).map((x) => norm(x.value));
+      }
+
+      function updateToggleLabel(toggleId, values, emptyText) {
+        const el = document.getElementById(toggleId);
+        if (!el) return;
+        el.textContent = values.length === 0 ? emptyText : `${values.length} selected`;
+      }
+
+      function clearGroup(groupId) {
+        document.querySelectorAll(`#${groupId} input[type='checkbox']`).forEach((x) => { x.checked = false; });
+        renderRows();
+      }
+
+      function buildFilterOptions(groupId, values) {
+        const host = document.getElementById(groupId);
+        host.innerHTML = values.map((v) => `<label class="status-filter-option"><input type="checkbox" value="${esc(v)}" onchange="renderRows()" /><span>${esc(v)}</span></label>`).join('');
+      }
+
+      function saveFilters() {
+        const state = {
+          search: (document.getElementById('metricSearch') || {}).value || '',
+          quarters: selected('quarterFilter'),
+          tracks: selected('trackFilter')
+        };
+        try { localStorage.setItem(FILTER_KEY, JSON.stringify(state)); } catch (_) {}
+      }
+
+      function loadFilters() {
+        try {
+          const raw = localStorage.getItem(FILTER_KEY) || '';
+          if (!raw) return {};
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (_) {
+          return {};
+        }
+      }
+
+      function renderRows() {
+        const query = norm((document.getElementById('metricSearch') || {}).value || '');
+        const qFilter = selected('quarterFilter');
+        const tFilter = selected('trackFilter');
+
+        const filtered = rows.filter((row) => {
+          if (query && !norm(`${row.company} ${row.track} ${row.quarter}`).includes(query)) return false;
+          if (qFilter.length && !qFilter.includes(norm(row.quarter))) return false;
+          if (tFilter.length && !tFilter.includes(norm(row.track))) return false;
+          return true;
+        });
+
+        document.getElementById('countLabel').textContent = `${filtered.length} closed track records`;
+
+        const body = filtered.map((row) => `<tr>
+          <td>${esc(row.company)}</td>
+          <td>${esc(row.track)}</td>
+          <td>${esc(row.quarter)}</td>
+          <td>${esc(row.days)}</td>
+        </tr>`).join('');
+
+        document.querySelector('#detailsTable tbody').innerHTML = body || '<tr><td colspan="4">No records</td></tr>';
+
+        updateToggleLabel('quarterFilterToggle', qFilter, 'All quarters');
+        updateToggleLabel('trackFilterToggle', tFilter, 'All tracks');
+        saveFilters();
+      }
+
+      function renderQuarterTable(quarters) {
+        const body = (quarters || []).map((q) => `<tr>
+          <td>${esc(q.quarter || '')}</td>
+          <td>${esc(q.count || 0)}</td>
+          <td>${esc(q.avg_close_days || 'N/A')}</td>
+          <td>${esc(q.avg_sra_days || 'N/A')}</td>
+          <td>${esc(q.avg_nva_days || 'N/A')}</td>
+        </tr>`).join('');
+
+        document.querySelector('#quarterTable tbody').innerHTML = body || '<tr><td colspan="5">No quarter data</td></tr>';
+      }
+
+      async function init() {
+        document.getElementById('projectsLink').href = `/admin/projects?key=${encodeURIComponent(key)}`;
+        document.getElementById('metricsLink').href = `/admin/metrics?key=${encodeURIComponent(key)}`;
+
+        const res = await fetch(`/api/metrics?key=${encodeURIComponent(key)}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.error || `Load failed (${res.status})`);
+
+        rows = data.rows || [];
+
+        const summary = data.summary || {};
+        document.getElementById('coreSummary').innerHTML = [
+          `Total Tracked Closures: ${summary.total_tracked_closures ?? 0}`,
+          `Overall Avg Close Days: ${summary.avg_close_days ?? 'N/A'}`,
+          `SRA Avg: ${summary.sra_avg_close_days ?? 'N/A'} (${summary.sra_count ?? 0})`,
+          `NVA Avg: ${summary.nva_avg_close_days ?? 'N/A'} (${summary.nva_count ?? 0})`
+        ].map((x) => `<span class="summary-pill">${esc(x)}</span>`).join('');
+
+        renderQuarterTable(data.quarters || []);
+
+        const allQuarters = [...new Set(rows.map((r) => r.quarter).filter(Boolean))].sort();
+        const allTracks = [...new Set(rows.map((r) => r.track).filter(Boolean))].sort();
+        buildFilterOptions('quarterFilter', allQuarters);
+        buildFilterOptions('trackFilter', allTracks);
+
+        const saved = loadFilters();
+        if (typeof saved.search === 'string') {
+          document.getElementById('metricSearch').value = saved.search;
+        }
+
+        const qSet = new Set(saved.quarters || []);
+        const tSet = new Set(saved.tracks || []);
+
+        document.querySelectorAll('#quarterFilter input[type="checkbox"]').forEach((x) => { x.checked = qSet.has(norm(x.value)); });
+        document.querySelectorAll('#trackFilter input[type="checkbox"]').forEach((x) => { x.checked = tSet.has(norm(x.value)); });
+
+        renderRows();
+      }
+
+      document.addEventListener('click', (evt) => {
+        ['quarterFilterControl', 'trackFilterControl'].forEach((id) => {
+          const box = document.getElementById(id);
+          if (!box || box.contains(evt.target)) return;
+          const panel = box.querySelector('.status-filter-panel');
+          if (panel) panel.hidden = true;
+        });
+      });
+
+      init().catch((err) => {
+        document.body.innerHTML = `<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(err.message || err)}</p></section></main>`;
+      });
     </script>
   </body>
 </html>
