@@ -17,6 +17,7 @@
       <header class="top">
         <h1 id="title">Project Status</h1>
       </header>
+      <section class="panel" id="inlineNotice" style="display:none;"></section>
 
       <section class="panel">
         <h2>Project Details</h2>
@@ -60,6 +61,13 @@
         if (['Project Lead', 'Project Support'].includes(label)) return '<span class="label-icon icon-user" aria-hidden="true"></span>';
         if (label === 'Time Zone') return '<span class="label-icon icon-clock" aria-hidden="true"></span>';
         return '';
+      }
+
+      function showInlineNotice(message) {
+        const node = document.getElementById('inlineNotice');
+        if (!node) return;
+        node.textContent = String(message || '').trim() || 'Unable to save date.';
+        node.style.display = '';
       }
 
       function overrideStorageKey() {
@@ -305,7 +313,7 @@
           await sendUpdate(form, true);
           location.reload();
         } catch (err) {
-          alert(err.message || 'Unable to save date.');
+          showInlineNotice(err.message || 'Unable to save date.');
           hideRowEditor(row.id);
         }
       }
@@ -318,7 +326,7 @@
           await sendUpdate(form, adjustFollowing);
           location.reload();
         } catch (err) {
-          alert(err.message || 'Unable to save date.');
+          showInlineNotice(err.message || 'Unable to save date.');
           hideRowEditor(row.id);
           closeChoices();
         }
@@ -343,7 +351,7 @@
           }
           location.reload();
         } catch (err) {
-          alert(err.message || 'Unable to save date.');
+          showInlineNotice(err.message || 'Unable to save date.');
           hideRowEditor(row.id);
           closeChoices();
         }
