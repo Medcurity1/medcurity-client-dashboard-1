@@ -207,17 +207,11 @@ body {
   min-width: 0;
 }
 
-.step-row.two-col p {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .step-row.owner-row .owner-value {
-  display: inline-block;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: bottom;
+  display: inline;
+  overflow: visible;
+  text-overflow: clip;
+  vertical-align: baseline;
 }
 
 .step-card.long-owner {
@@ -226,6 +220,14 @@ body {
 
 .step-card.long-owner .step-row.owner-row {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.step-card.long-owner .step-row.owner-row .owner-value {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 
 .date-edit {
