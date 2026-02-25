@@ -19,7 +19,7 @@ body {
 }
 
 .page {
-  width: min(1280px, 96vw);
+  width: min(1420px, 97vw);
   margin: 28px auto 40px;
 }
 
@@ -166,7 +166,7 @@ body {
 
 .step-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
   gap: 10px;
 }
 
@@ -209,30 +209,12 @@ body {
 
 .step-row.owner-row .owner-value {
   display: inline;
-  overflow: visible;
-  text-overflow: clip;
-  vertical-align: baseline;
 }
 
-.step-card.long-owner {
-  grid-column: 1 / -1;
-}
-
-.step-card.long-owner .step-row.owner-row {
-  grid-template-columns: minmax(145px, auto) minmax(0, 1fr);
-}
-
-.step-card.long-owner .step-row.owner-row .owner-value {
-  display: inline;
-  max-width: none;
-  overflow: visible;
-  text-overflow: clip;
-  vertical-align: baseline;
-}
-
-.step-card.long-owner .step-row.owner-row p:last-child {
-  overflow: visible;
-  text-overflow: clip;
+.step-row.owner-row p:last-child {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
 }
 
 .date-edit {
