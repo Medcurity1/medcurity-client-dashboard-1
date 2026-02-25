@@ -94,6 +94,27 @@ function addDays(d, days) {
   return out;
 }
 
+function diffCalendarDays(a, b) {
+  const aa = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+  const bb = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((aa.getTime() - bb.getTime()) / 86400000);
+}
+
+function toClickupMsFromYmd(ymd) {
+  if (!ymd) return null;
+  const m = String(ymd).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0, 0);
+  return dt.getTime();
+}
+
+function toClickupMsFromUs(us) {
+  const dt = parseAnyUSDate(us);
+  if (!dt) return null;
+  const atNoon = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 12, 0, 0, 0);
+  return atNoon.getTime();
+}
+
 function parseMetricDate(v) {
   const dt = parseAnyUSDate(v);
   if (!dt) return null;
@@ -964,6 +985,7 @@ app.http('update', {
       const metricKey = String(body.metric_key || '').trim();
       const value = String(body.value || '').trim();
       const sig = String(body.sig || '').trim();
+      const adjustFollowing = String(body.adjust_following || 'yes').trim().toLowerCase() !== 'no';
       if (!sfId || !metricKey || !sig || sig !== sign(sfId)) return json(400, { error: 'invalid_payload' });
 
       const rows = await fetchListRows();
@@ -974,8 +996,64 @@ app.http('update', {
       const fieldId = fieldMap[metricKey];
       if (!fieldId) return json(400, { error: 'field_not_mapped' });
 
-      const clickupValue = value ? String(new Date(value).getTime()) : null;
+      const clickupValue = value ? toClickupMsFromYmd(value) : null;
       await updateCustomField(row.task_id, fieldId, clickupValue);
+
+      // Optional ECD propagation: shift later ECDs by the same day delta,
+      // skipping steps with ACD already set (completed steps).
+      const parts = metricKey.split('.');
+      if (parts.length === 3 && parts[2] === 'ecd' && adjustFollowing) {
+        const section = parts[0];
+        const slug = parts[1];
+        const oldDate = parseAnyUSDate(row.metrics?.[metricKey] || '');
+        const newMs = toClickupMsFromYmd(value);
+        const newDate = newMs != null ? new Date(newMs) : null;
+        if (oldDate && newDate) {
+          const deltaDays = diffCalendarDays(newDate, oldDate);
+          if (deltaDays !== 0) {
+            const sraOrder = [
+              'sra_kickoff',
+              'receive_policies_and_procedures_baa',
+              'review_policies_and_procedures_baa',
+              'schedule_onsite_remote_interview',
+              'go_onsite_have_interview',
+              'recieve_requested_follow_up_documentation',
+              'review_sra',
+              'schedule_final_sra_report',
+              'present_final_sra_report',
+            ];
+            const nvaOrder = [
+              'nva_kickoff',
+              'receive_credentials',
+              'verify_access',
+              'scans_complete',
+              'access_removed',
+              'compile_report',
+              'schedule_final_nva_report',
+              'present_final_nva_report',
+            ];
+            const order = section === 'sra' ? sraOrder : section === 'nva' ? nvaOrder : [];
+            const idx = order.indexOf(slug);
+            if (idx >= 0) {
+              for (const laterSlug of order.slice(idx + 1)) {
+                const laterAcdKey = `${section}.${laterSlug}.date`;
+                const laterAcd = parseAnyUSDate(row.metrics?.[laterAcdKey] || row.metrics?.[`${section}.${laterSlug}.acd`] || '');
+                if (laterAcd) continue;
+
+                const laterEcdKey = `${section}.${laterSlug}.ecd`;
+                const laterFieldId = fieldMap[laterEcdKey];
+                const laterCurrent = parseAnyUSDate(row.metrics?.[laterEcdKey] || '');
+                if (!laterFieldId || !laterCurrent) continue;
+
+                const shifted = shiftBusinessSafe(laterCurrent, deltaDays);
+                const shiftedMs = toClickupMsFromUs(formatUSDate(shifted));
+                if (shiftedMs == null) continue;
+                await updateCustomField(row.task_id, laterFieldId, shiftedMs);
+              }
+            }
+          }
+        }
+      }
       return json(200, { ok: true });
     } catch (err) {
       ctx.error(err);

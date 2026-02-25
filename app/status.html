@@ -116,13 +116,18 @@
         if (!form || !row) return;
 
         const isAcd = (form.dataset.dateType || '').toLowerCase() === 'acd';
+        const isEcd = (form.dataset.dateType || '').toLowerCase() === 'ecd';
         if (isAcd && choice) {
           choice.classList.add('show');
           return;
         }
 
         try {
-          await sendUpdate(form, true);
+          let adjust = true;
+          if (isEcd) {
+            adjust = window.confirm('Adjust following ECD dates based on this change?');
+          }
+          await sendUpdate(form, adjust);
           location.reload();
         } catch (err) {
           alert(err.message || 'Unable to save date.');
