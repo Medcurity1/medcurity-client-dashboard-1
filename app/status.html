@@ -532,11 +532,11 @@
         document.querySelectorAll('.step-card').forEach((card) => {
           card.classList.remove('owner-compact', 'owner-tight');
           const ownerRow = card.querySelector('.owner-row');
-          const ownerValue = card.querySelector('.owner-value');
-          if (!ownerRow || !ownerValue) return;
+          const ownerCell = card.querySelector('.owner-row p:last-child');
+          if (!ownerRow || !ownerCell) return;
 
           ownerRow.style.gridTemplateColumns = '';
-          const overflow = ownerValue.scrollWidth - ownerValue.clientWidth;
+          const overflow = ownerCell.scrollWidth - ownerCell.clientWidth;
           if (overflow <= 1) return;
 
           const rowWidth = ownerRow.clientWidth || 0;
@@ -547,17 +547,17 @@
           let left = Math.round(baseLeft - shift);
           ownerRow.style.gridTemplateColumns = `${left}px minmax(0, 1fr)`;
 
-          let overflowAfterShift = ownerValue.scrollWidth - ownerValue.clientWidth;
+          let overflowAfterShift = ownerCell.scrollWidth - ownerCell.clientWidth;
           if (overflowAfterShift > 1 && left > 120) {
             const extraShift = Math.min(left - 120, overflowAfterShift + 4);
             left = Math.round(left - extraShift);
             ownerRow.style.gridTemplateColumns = `${left}px minmax(0, 1fr)`;
-            overflowAfterShift = ownerValue.scrollWidth - ownerValue.clientWidth;
+            overflowAfterShift = ownerCell.scrollWidth - ownerCell.clientWidth;
           }
 
           if (overflowAfterShift > 1) {
             card.classList.add('owner-compact');
-            const overflowCompact = ownerValue.scrollWidth - ownerValue.clientWidth;
+            const overflowCompact = ownerCell.scrollWidth - ownerCell.clientWidth;
             if (overflowCompact > 1) {
               card.classList.add('owner-tight');
             }
