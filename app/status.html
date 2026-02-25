@@ -508,13 +508,11 @@
 
       function renderStep(section, name, step, idx) {
         const ownerText = String(step.owner || step.Owner || 'Not assigned');
-        const ownerIsLong = ownerText.length > 62;
-        const cardClass = ownerIsLong ? 'step-card long-owner' : 'step-card';
         const extras = (step.extras || [])
           .map((x) => `<p><span class="label">${esc(x.label)}:</span> <span class="value">${esc(x.value || 'Not set')}</span></p>`)
           .join('');
 
-        return `<section class="${cardClass}">
+        return `<section class="step-card">
           <h3>${esc(name)}</h3>
           <div class="step-fields">
             <div class="step-row two-col owner-row">
@@ -528,6 +526,17 @@
             ${extras}
           </div>
         </section>`;
+      }
+
+      function applyOwnerOverflowLayout() {
+        document.querySelectorAll('.step-card').forEach((card) => {
+          card.classList.remove('long-owner');
+          const ownerCell = card.querySelector('.owner-row p:last-child');
+          if (!ownerCell) return;
+          if (ownerCell.scrollWidth > ownerCell.clientWidth + 2) {
+            card.classList.add('long-owner');
+          }
+        });
       }
 
       async function loadPage() {
@@ -576,6 +585,9 @@
           document.getElementById('nvaSteps').innerHTML = Object.entries(nva).map(([name, step], idx) => renderStep('nva', name, step, idx)).join('');
         }
 
+        applyOwnerOverflowLayout();
+        window.requestAnimationFrame(applyOwnerOverflowLayout);
+
         const extra = dashboard.extra_metrics || {};
         if (Object.keys(extra).length) {
           document.getElementById('extraPanel').style.display = '';
@@ -606,6 +618,8 @@
       loadPage().catch((err) => {
         document.body.innerHTML = `<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(err.message || err)}</p></section></main>`;
       });
+
+      window.addEventListener('resize', applyOwnerOverflowLayout);
     </script>
   </body>
 </html>
