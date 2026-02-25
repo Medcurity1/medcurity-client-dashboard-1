@@ -296,27 +296,13 @@
 
         const isAcd = (form.dataset.dateType || '').toLowerCase() === 'acd';
         const isEcd = (form.dataset.dateType || '').toLowerCase() === 'ecd';
-        if (isAcd && choice) {
+        if ((isAcd || isEcd) && choice) {
           choice.classList.add('show');
           return;
         }
 
         try {
-          let adjust = true;
-          if (isEcd) {
-            adjust = window.confirm('Adjust following ECD dates based on this change?');
-          }
-          const payload = await sendUpdate(form, adjust);
-          if (isEcd && payload && payload.local_only && currentDashboard) {
-            const draft = JSON.parse(JSON.stringify(currentDashboard));
-            const touched = collectEcdOverrideChanges(draft, form.dataset.metricKey || '', inputEl.value || '', adjust);
-            const overrides = loadEcdOverrides();
-            for (const [k, v] of Object.entries(touched)) {
-              if (String(v || '').trim()) overrides[k] = v;
-              else delete overrides[k];
-            }
-            saveEcdOverrides(overrides);
-          }
+          await sendUpdate(form, true);
           location.reload();
         } catch (err) {
           alert(err.message || 'Unable to save date.');
@@ -330,6 +316,31 @@
         if (!form || !row) return;
         try {
           await sendUpdate(form, adjustFollowing);
+          location.reload();
+        } catch (err) {
+          alert(err.message || 'Unable to save date.');
+          hideRowEditor(row.id);
+          closeChoices();
+        }
+      }
+
+      async function submitEcdChoice(buttonEl, adjustFollowing) {
+        const form = buttonEl.closest('form.date-edit');
+        const row = form ? form.querySelector('.date-inline') : null;
+        if (!form || !row) return;
+        try {
+          const payload = await sendUpdate(form, adjustFollowing);
+          if (payload && payload.local_only && currentDashboard) {
+            const inputEl = form.querySelector('input[type="date"]');
+            const draft = JSON.parse(JSON.stringify(currentDashboard));
+            const touched = collectEcdOverrideChanges(draft, form.dataset.metricKey || '', (inputEl && inputEl.value) || '', adjustFollowing);
+            const overrides = loadEcdOverrides();
+            for (const [k, v] of Object.entries(touched)) {
+              if (String(v || '').trim()) overrides[k] = v;
+              else delete overrides[k];
+            }
+            saveEcdOverrides(overrides);
+          }
           location.reload();
         } catch (err) {
           alert(err.message || 'Unable to save date.');
@@ -365,6 +376,14 @@
             </div>`
           : '';
 
+        const ecdChoice = type === 'ecd'
+          ? `<div class="acd-choice ecd-choice">
+              <span class="acd-choice-label">Apply this ECD change to following timeline?</span>
+              <button type="button" onclick="submitEcdChoice(this, true)">Adjust following ECDs</button>
+              <button type="button" class="ghost" onclick="submitEcdChoice(this, false)">Keep following ECDs</button>
+            </div>`
+          : '';
+
         return `<form class="date-edit" data-metric-key="${esc(metricKey)}" data-date-type="${type}">
           <span class="label">${type.toUpperCase()}:</span>
           <div class="date-inline" id="${id}">
@@ -374,6 +393,7 @@
             </span>
           </div>
           ${acdChoice}
+          ${ecdChoice}
         </form>`;
       }
 
