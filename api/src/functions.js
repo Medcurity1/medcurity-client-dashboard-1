@@ -345,7 +345,8 @@ function addEcdAcdFields(stepMap, offsets) {
     step.ecd.input_value = toInputDate(step.ECD);
     step.acd.input_value = toInputDate(step.ACD);
     if (!step.isKickoff) {
-      step.ecd.editable = !!resolveFieldId(fieldMap, step.ecd?.metric_key || '');
+      // ECD can be overridden in dashboard even when no ClickUp ECD field is mapped.
+      step.ecd.editable = true;
     }
   }
 }
@@ -1021,14 +1022,18 @@ app.http('update', {
       const fieldMap = parseFieldMap();
       const resolved = resolveFieldId(fieldMap, metricKey);
       const fieldId = resolved?.id;
-      if (!fieldId) return json(400, { error: 'field_not_mapped', metric_key: metricKey });
+      const metricParts = metricKey.split('.');
+      const isEcdMetric = metricParts.length === 3 && metricParts[2] === 'ecd';
+      if (!fieldId && !isEcdMetric) return json(400, { error: 'field_not_mapped', metric_key: metricKey });
 
       const clickupValue = value ? toClickupMsFromYmd(value) : null;
-      await updateCustomField(row.task_id, fieldId, clickupValue);
+      if (fieldId) {
+        await updateCustomField(row.task_id, fieldId, clickupValue);
+      }
 
       // Optional ECD propagation: shift later ECDs by the same day delta,
       // skipping steps with ACD already set (completed steps).
-      const parts = metricKey.split('.');
+      const parts = metricParts;
       if (parts.length === 3 && parts[2] === 'ecd' && adjustFollowing) {
         const section = parts[0];
         const slug = parts[1];
@@ -1082,7 +1087,7 @@ app.http('update', {
           }
         }
       }
-      return json(200, { ok: true });
+      return json(200, { ok: true, local_only: !fieldId && isEcdMetric });
     } catch (err) {
       ctx.error(err);
       return json(500, { error: 'server_error', detail: String(err.message || err) });

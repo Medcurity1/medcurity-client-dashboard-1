@@ -48,6 +48,7 @@
       const key = qp.get('key') || '';
       const mode = (qp.get('mode') || '').toLowerCase();
       const canEdit = mode === 'admin' && !!key;
+      let currentDashboard = null;
 
       function esc(value) {
         return String(value || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
@@ -59,6 +60,183 @@
         if (['Project Lead', 'Project Support'].includes(label)) return '<span class="label-icon icon-user" aria-hidden="true"></span>';
         if (label === 'Time Zone') return '<span class="label-icon icon-clock" aria-hidden="true"></span>';
         return '';
+      }
+
+      function overrideStorageKey() {
+        return `ecd_overrides:${sfId}`;
+      }
+
+      function loadEcdOverrides() {
+        try {
+          const raw = localStorage.getItem(overrideStorageKey());
+          if (!raw) return {};
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (_) {
+          return {};
+        }
+      }
+
+      function saveEcdOverrides(overrides) {
+        try {
+          localStorage.setItem(overrideStorageKey(), JSON.stringify(overrides || {}));
+        } catch (_) {}
+      }
+
+      function parseUsDate(value) {
+        const m = String(value || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (!m) return null;
+        const d = new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2]));
+        return Number.isNaN(d.getTime()) ? null : d;
+      }
+
+      function formatUsDate(d) {
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const yy = d.getFullYear();
+        return `${mm}/${dd}/${yy}`;
+      }
+
+      function usFromYmd(ymd) {
+        const m = String(ymd || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (!m) return '';
+        return `${m[2]}/${m[3]}/${m[1]}`;
+      }
+
+      function ymdFromUs(us) {
+        const m = String(us || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        if (!m) return '';
+        return `${m[3]}-${m[1]}-${m[2]}`;
+      }
+
+      function addDays(d, n) {
+        const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        out.setDate(out.getDate() + n);
+        return out;
+      }
+
+      function shiftToMondayIfWeekend(d) {
+        const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        if (out.getDay() === 6) out.setDate(out.getDate() + 2);
+        if (out.getDay() === 0) out.setDate(out.getDate() + 1);
+        return out;
+      }
+
+      function shiftToFridayIfWeekend(d) {
+        const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        if (out.getDay() === 6) out.setDate(out.getDate() - 1);
+        if (out.getDay() === 0) out.setDate(out.getDate() - 2);
+        return out;
+      }
+
+      function diffCalendarDays(a, b) {
+        const aa = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+        const bb = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+        return Math.round((aa.getTime() - bb.getTime()) / 86400000);
+      }
+
+      function shiftBusinessSafe(d, deltaDays) {
+        const shifted = addDays(d, deltaDays);
+        return deltaDays < 0 ? shiftToFridayIfWeekend(shifted) : shiftToMondayIfWeekend(shifted);
+      }
+
+      function stepStatusClass(status) {
+        if (status === 'On Track' || status === 'Completed') return 'status-pill-green';
+        if (status === 'Potential Roadblock') return 'status-pill-yellow';
+        if (status === 'Roadblock/Overage') return 'status-pill-red';
+        return 'status-pill-neutral';
+      }
+
+      function computeStepStatus(step) {
+        const isKickoff = !!step.isKickoff || String(step.step_slug || '').includes('kickoff');
+        const acd = String(step?.acd?.value || '').trim();
+        const ecd = String(step?.ecd?.value || '').trim();
+        if (acd && acd.toLowerCase() !== 'not set') return isKickoff ? 'Completed' : 'On Track';
+        if (isKickoff) return 'Not Started';
+        const ecdDate = parseUsDate(ecd);
+        if (!ecdDate) return 'Not Started';
+        const today = new Date();
+        const now = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        const due = new Date(ecdDate.getFullYear(), ecdDate.getMonth(), ecdDate.getDate());
+        const diff = Math.ceil((due.getTime() - now.getTime()) / 86400000);
+        if (diff < 0) return 'Roadblock/Overage';
+        if (diff <= 3) return 'Potential Roadblock';
+        return 'On Track';
+      }
+
+      function recalcStatuses(dashboard) {
+        for (const section of ['sra_steps', 'nva_steps']) {
+          for (const step of Object.values(dashboard?.[section] || {})) {
+            const status = computeStepStatus(step);
+            step.status = status;
+            step.status_class = stepStatusClass(status);
+          }
+        }
+      }
+
+      function applyEcdValue(step, usDate) {
+        const us = String(usDate || '').trim();
+        step.ECD = us;
+        if (step.ecd) {
+          step.ecd.value = us || 'Not set';
+          step.ecd.input_value = us ? ymdFromUs(us) : '';
+        }
+      }
+
+      function collectEcdOverrideChanges(dashboard, metricKey, ymdValue, adjustFollowing) {
+        const parts = String(metricKey || '').split('.');
+        if (parts.length !== 3 || parts[2] !== 'ecd') return {};
+        const sectionKey = parts[0] === 'sra' ? 'sra_steps' : parts[0] === 'nva' ? 'nva_steps' : '';
+        if (!sectionKey) return {};
+
+        const entries = Object.entries(dashboard?.[sectionKey] || {});
+        const idx = entries.findIndex(([, step]) => String(step?.ecd?.metric_key || '') === metricKey);
+        if (idx < 0) return {};
+
+        const target = entries[idx][1];
+        const nextUs = usFromYmd(ymdValue);
+        const prevUs = String(target?.ecd?.value || '');
+        const touched = {};
+
+        applyEcdValue(target, nextUs);
+        touched[metricKey] = nextUs;
+
+        const oldDate = parseUsDate(prevUs);
+        const newDate = parseUsDate(nextUs);
+        if (!adjustFollowing || !oldDate || !newDate) return touched;
+
+        const delta = diffCalendarDays(newDate, oldDate);
+        if (!delta) return touched;
+
+        for (let i = idx + 1; i < entries.length; i += 1) {
+          const step = entries[i][1];
+          const acdDate = parseUsDate(String(step?.acd?.value || ''));
+          if (acdDate) continue;
+
+          const currentEcd = parseUsDate(String(step?.ecd?.value || ''));
+          if (!currentEcd) continue;
+
+          const shifted = shiftBusinessSafe(currentEcd, delta);
+          const shiftedUs = formatUsDate(shifted);
+          applyEcdValue(step, shiftedUs);
+          const keyForStep = String(step?.ecd?.metric_key || '');
+          if (keyForStep) touched[keyForStep] = shiftedUs;
+        }
+        return touched;
+      }
+
+      function applyStoredEcdOverrides(dashboard, overrides) {
+        const map = overrides || {};
+        for (const section of ['sra_steps', 'nva_steps']) {
+          for (const step of Object.values(dashboard?.[section] || {})) {
+            const key = String(step?.ecd?.metric_key || '');
+            if (!key) continue;
+            const saved = String(map[key] || '').trim();
+            if (!saved) continue;
+            applyEcdValue(step, saved);
+          }
+        }
+        recalcStatuses(dashboard);
       }
 
       function closeDateEditors() {
@@ -107,6 +285,7 @@
         if (!res.ok) {
           throw new Error(payload.detail || payload.error || `Update failed (${res.status})`);
         }
+        return payload;
       }
 
       async function onDateChange(inputEl) {
@@ -127,7 +306,17 @@
           if (isEcd) {
             adjust = window.confirm('Adjust following ECD dates based on this change?');
           }
-          await sendUpdate(form, adjust);
+          const payload = await sendUpdate(form, adjust);
+          if (isEcd && payload && payload.local_only && currentDashboard) {
+            const draft = JSON.parse(JSON.stringify(currentDashboard));
+            const touched = collectEcdOverrideChanges(draft, form.dataset.metricKey || '', inputEl.value || '', adjust);
+            const overrides = loadEcdOverrides();
+            for (const [k, v] of Object.entries(touched)) {
+              if (String(v || '').trim()) overrides[k] = v;
+              else delete overrides[k];
+            }
+            saveEcdOverrides(overrides);
+          }
           location.reload();
         } catch (err) {
           alert(err.message || 'Unable to save date.');
@@ -236,6 +425,8 @@
         document.getElementById('title').textContent = data.task_name || 'Project Status';
 
         const dashboard = data.dashboard || {};
+        currentDashboard = dashboard;
+        applyStoredEcdOverrides(dashboard, loadEcdOverrides());
         const details = dashboard.project_details || {};
         document.getElementById('projectDetails').innerHTML = Object.entries(details)
           .map(([label, value]) => `<article class="detail-item"><p class="label">${iconForLabel(label)}${esc(label)}</p><p class="value">${esc(value || 'Not set')}</p></article>`)
