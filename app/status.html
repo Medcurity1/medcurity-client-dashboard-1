@@ -47,7 +47,7 @@
       const sig = qp.get('sig') || '';
       const key = qp.get('key') || '';
       const mode = (qp.get('mode') || '').toLowerCase();
-      const canEdit = mode === 'admin' && !!key;
+      const canEdit = !!key;
       let currentDashboard = null;
 
       function esc(value) {
