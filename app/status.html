@@ -258,6 +258,28 @@
         return keep;
       }
 
+      function collectFollowingEcdSnapshotFromDom(acdForm) {
+        const keep = {};
+        const track = acdForm ? acdForm.closest('.track') : null;
+        const stepCard = acdForm ? acdForm.closest('.step-card') : null;
+        if (!track || !stepCard) return keep;
+
+        const cards = Array.from(track.querySelectorAll('.step-card'));
+        const idx = cards.indexOf(stepCard);
+        if (idx < 0) return keep;
+
+        for (const card of cards.slice(idx + 1)) {
+          const ecdForm = card.querySelector('form.date-edit[data-date-type="ecd"]');
+          if (!ecdForm) continue;
+          const ecdKey = String(ecdForm.dataset.metricKey || '').trim();
+          if (!ecdKey) continue;
+          const valueNode = ecdForm.querySelector('.date-value-btn');
+          const shown = String(valueNode ? valueNode.textContent : '').trim();
+          keep[ecdKey] = shown && shown.toLowerCase() !== 'not set' ? shown : null;
+        }
+        return keep;
+      }
+
       function clearFollowingEcdOverrides(dashboard, acdMetricKey, overrides) {
         const parts = String(acdMetricKey || '').split('.');
         if (parts.length !== 3) return;
@@ -277,6 +299,24 @@
           if (ecdKey && Object.prototype.hasOwnProperty.call(overrides, ecdKey)) {
             delete overrides[ecdKey];
           }
+        }
+      }
+
+      function clearFollowingEcdOverridesFromDom(acdForm, overrides) {
+        const track = acdForm ? acdForm.closest('.track') : null;
+        const stepCard = acdForm ? acdForm.closest('.step-card') : null;
+        if (!track || !stepCard) return;
+
+        const cards = Array.from(track.querySelectorAll('.step-card'));
+        const idx = cards.indexOf(stepCard);
+        if (idx < 0) return;
+
+        for (const card of cards.slice(idx + 1)) {
+          const ecdForm = card.querySelector('form.date-edit[data-date-type="ecd"]');
+          if (!ecdForm) continue;
+          const ecdKey = String(ecdForm.dataset.metricKey || '').trim();
+          if (!ecdKey) continue;
+          if (Object.prototype.hasOwnProperty.call(overrides, ecdKey)) delete overrides[ecdKey];
         }
       }
 
@@ -374,16 +414,16 @@
         const row = form ? form.querySelector('.date-inline') : null;
         if (!form || !row) return;
         try {
-          if (currentDashboard) {
-            const overrides = loadEcdOverrides();
-            if (adjustFollowing) {
-              clearFollowingEcdOverrides(currentDashboard, form.dataset.metricKey || '', overrides);
-            } else {
-              const snapshot = collectFollowingEcdSnapshot(currentDashboard, form.dataset.metricKey || '');
-              Object.assign(overrides, snapshot);
-            }
-            saveEcdOverrides(overrides);
+          const overrides = loadEcdOverrides();
+          if (adjustFollowing) {
+            clearFollowingEcdOverridesFromDom(form, overrides);
+            if (currentDashboard) clearFollowingEcdOverrides(currentDashboard, form.dataset.metricKey || '', overrides);
+          } else {
+            const domSnapshot = collectFollowingEcdSnapshotFromDom(form);
+            const fallbackSnapshot = currentDashboard ? collectFollowingEcdSnapshot(currentDashboard, form.dataset.metricKey || '') : {};
+            Object.assign(overrides, fallbackSnapshot, domSnapshot);
           }
+          saveEcdOverrides(overrides);
           await sendUpdate(form, adjustFollowing);
           location.reload();
         } catch (err) {
