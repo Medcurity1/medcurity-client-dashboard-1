@@ -578,6 +578,18 @@ body {
   margin: 10px 0;
 }
 
+.mini-link {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.mini-link:hover {
+  text-decoration: underline;
+}
+
 a {
   color: var(--blue);
   text-decoration: none;

@@ -64,10 +64,34 @@ function sign(sfId) {
   return crypto.createHmac('sha256', secret).update(String(sfId)).digest('hex');
 }
 
+function readHeader(headers, key) {
+  if (!headers) return '';
+  if (typeof headers.get === 'function') return String(headers.get(key) || '').trim();
+  return String(headers[key] || headers[String(key).toLowerCase()] || '').trim();
+}
+
+function requestHost(req) {
+  const host = readHeader(req.headers, 'x-forwarded-host') || readHeader(req.headers, 'host');
+  return String(host || '').trim().toLowerCase().split(',')[0].trim();
+}
+
+function hostAllowedForAdmin(req) {
+  const allowRaw = String(process.env.ADMIN_ALLOWED_HOSTS || '').trim();
+  if (!allowRaw) return true;
+  const host = requestHost(req);
+  if (!host) return false;
+  const allowed = allowRaw
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+  return allowed.some((h) => host === h || host.startsWith(`${h}:`));
+}
+
 function isAdmin(req) {
+  if (!hostAllowedForAdmin(req)) return false;
   const configured = (process.env.ADMIN_API_KEY || '').trim();
   if (!configured) return true;
-  const provided = (req.query.key || req.headers['x-api-key'] || '').trim();
+  const provided = String(req.query.key || readHeader(req.headers, 'x-api-key') || '').trim();
   return provided === configured;
 }
 

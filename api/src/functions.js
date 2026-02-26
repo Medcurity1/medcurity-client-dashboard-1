@@ -1,6 +1,7 @@
 const { app } = require('@azure/functions');
 const { fetchListRows, updateCustomField, fetchLatestTaskComment } = require('../shared/clickup');
 const { isAdmin, sign, parseUSDate, dateDiffBusinessDays, quarterLabel, parseFieldMap } = require('../shared/utils');
+const { hasStorageConfig, getOverrides, replaceOverrides } = require('../shared/ecdOverrides');
 const fs = require('fs');
 const path = require('path');
 
@@ -14,6 +15,12 @@ function getMetric(metrics, ...keys) {
     if (value) return value;
   }
   return '';
+}
+
+function getClientBaseUrl() {
+  const raw = String(process.env.CLIENT_PUBLIC_BASE_URL || '').trim();
+  if (!raw) return '';
+  return raw.replace(/\/+$/, '');
 }
 
 function metricKeyAliases(metricKey) {
@@ -991,7 +998,47 @@ app.http('generateLink', {
       const sfId = String(req.query.get('sf_id') || req.query.get('sfId') || '').trim();
       if (!sfId) return json(400, { error: 'missing_sf_id' });
       const signature = sign(sfId);
-      return json(200, { sf_id: sfId, signature, relative_status_url: `/status?sf_id=${encodeURIComponent(sfId)}&sig=${signature}` });
+      const relative = `/status?sf_id=${encodeURIComponent(sfId)}&sig=${signature}`;
+      const base = getClientBaseUrl();
+      return json(200, {
+        sf_id: sfId,
+        signature,
+        relative_status_url: relative,
+        client_status_url: base ? `${base}${relative}` : relative,
+      });
+    } catch (err) {
+      ctx.error(err);
+      return json(500, { error: 'server_error', detail: String(err.message || err) });
+    }
+  },
+});
+
+app.http('ecdOverrides', {
+  methods: ['GET', 'POST'],
+  authLevel: 'anonymous',
+  route: 'ecdOverrides',
+  handler: async (req, ctx) => {
+    try {
+      const method = String(req.method || 'GET').toUpperCase();
+      if (method === 'GET') {
+        const sfId = String(req.query.get('sf_id') || req.query.get('sfId') || '').trim();
+        const sig = String(req.query.get('sig') || '').trim();
+        if (!sfId || sig !== sign(sfId)) return json(403, { error: 'forbidden' });
+        const overrides = await getOverrides(sfId);
+        return json(200, { enabled: hasStorageConfig(), sf_id: sfId, overrides: overrides || {} });
+      }
+
+      if (!isAdmin({ query: Object.fromEntries(req.query.entries()), headers: req.headers })) {
+        return json(401, { error: 'unauthorized' });
+      }
+      const body = (await req.json()) || {};
+      const sfId = String(body.sf_id || '').trim();
+      const sig = String(body.sig || '').trim();
+      const overrides = body.overrides && typeof body.overrides === 'object' ? body.overrides : {};
+      if (!sfId || sig !== sign(sfId)) return json(400, { error: 'invalid_payload' });
+      const ok = await replaceOverrides(sfId, overrides);
+      if (!ok) return json(200, { enabled: false, sf_id: sfId, saved: false });
+      return json(200, { enabled: true, sf_id: sfId, saved: true });
     } catch (err) {
       ctx.error(err);
       return json(500, { error: 'server_error', detail: String(err.message || err) });

@@ -48,7 +48,11 @@
       const sig = qp.get('sig') || '';
       const key = qp.get('key') || '';
       const mode = (qp.get('mode') || '').toLowerCase();
-      const canEdit = !!key;
+      const STAGING_HOST = 'staging.status.medcurity.com';
+      const host = String(location.hostname || '').toLowerCase();
+      const isLocalHost = host === 'localhost' || host === '127.0.0.1' || /^192\.168\./.test(host);
+      const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
+      const canEdit = !!key && (isStagingHost || isLocalHost);
       let currentDashboard = null;
 
       function esc(value) {
@@ -89,6 +93,37 @@
         try {
           localStorage.setItem(overrideStorageKey(), JSON.stringify(overrides || {}));
         } catch (_) {}
+      }
+
+      async function fetchServerEcdOverrides() {
+        try {
+          const res = await fetch(`/api/ecdOverrides?sf_id=${encodeURIComponent(sfId)}&sig=${encodeURIComponent(sig)}`);
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data || !data.enabled) return null;
+          const overrides = data.overrides && typeof data.overrides === 'object' ? data.overrides : {};
+          return overrides;
+        } catch (_) {
+          return null;
+        }
+      }
+
+      async function saveServerEcdOverrides(overrides) {
+        try {
+          const res = await fetch(`/api/ecdOverrides?key=${encodeURIComponent(key)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sf_id: sfId,
+              sig,
+              overrides: overrides || {},
+            })
+          });
+          if (!res.ok) return false;
+          const data = await res.json().catch(() => ({}));
+          return !!(data && data.enabled && data.saved);
+        } catch (_) {
+          return false;
+        }
       }
 
       function parseUsDate(value) {
@@ -424,6 +459,7 @@
             Object.assign(overrides, fallbackSnapshot, domSnapshot);
           }
           saveEcdOverrides(overrides);
+          await saveServerEcdOverrides(overrides);
           await sendUpdate(form, adjustFollowing);
           location.reload();
         } catch (err) {
@@ -449,6 +485,7 @@
               else delete overrides[k];
             }
             saveEcdOverrides(overrides);
+            await saveServerEcdOverrides(overrides);
           }
           location.reload();
         } catch (err) {
@@ -585,7 +622,9 @@
           if (canEdit) {
             const vt = document.getElementById('viewToggle');
             vt.style.display = '';
-            vt.href = `/status?sf_id=${encodeURIComponent(sfId)}&sig=${encodeURIComponent(sig)}`;
+            const clientBase = isStagingHost ? 'https://status.medcurity.com' : '';
+            const clientPath = `/status?sf_id=${encodeURIComponent(sfId)}&sig=${encodeURIComponent(sig)}`;
+            vt.href = `${clientBase}${clientPath}`;
           }
         }
 
@@ -593,7 +632,9 @@
 
         const dashboard = data.dashboard || {};
         currentDashboard = dashboard;
-        applyStoredEcdOverrides(dashboard, loadEcdOverrides());
+        const serverOverrides = await fetchServerEcdOverrides();
+        if (serverOverrides) saveEcdOverrides(serverOverrides);
+        applyStoredEcdOverrides(dashboard, serverOverrides || loadEcdOverrides());
         const details = dashboard.project_details || {};
         document.getElementById('projectDetails').innerHTML = Object.entries(details)
           .map(([label, value]) => `<article class="detail-item"><p class="label">${iconForLabel(label)}${esc(label)}</p><p class="value">${esc(value || 'Not set')}</p></article>`)

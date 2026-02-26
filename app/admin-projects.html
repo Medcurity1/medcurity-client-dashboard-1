@@ -65,6 +65,7 @@
     <script>
       const qp = new URLSearchParams(location.search);
       const key = qp.get('key') || '';
+      const CLIENT_BASE = 'https://status.medcurity.com';
       const FILTER_KEY = 'medcurity_admin_filters_v2';
       let projects = [];
 
@@ -241,9 +242,10 @@
         host.innerHTML = keys.map((quarter) => {
           const items = grouped[quarter].slice().sort((a, b) => String(a.task_name || '').localeCompare(String(b.task_name || ''), undefined, { sensitivity: 'base' }));
           const body = items.map((p) => {
-            const link = `/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}&mode=admin&key=${encodeURIComponent(key)}`;
+            const adminLink = `/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}&mode=admin&key=${encodeURIComponent(key)}`;
+            const clientLink = `${CLIENT_BASE}/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}`;
             return `<tr>
-              <td><a href="${link}">${esc(p.task_name)}</a></td>
+              <td><a href="${adminLink}">${esc(p.task_name)}</a><br/><a class="mini-link" href="${clientLink}" target="_blank" rel="noreferrer">Client Link</a></td>
               <td>${esc(p.sf_id)}</td>
               <td>${esc(p.project_lead || 'Not assigned')}</td>
               <td>${esc(p.project_support || '-')}</td>
