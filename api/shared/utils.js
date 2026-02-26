@@ -75,6 +75,17 @@ function requestHost(req) {
   return String(host || '').trim().toLowerCase().split(',')[0].trim();
 }
 
+function hostFromUrlHeader(req, headerName) {
+  const raw = readHeader(req.headers, headerName);
+  if (!raw) return '';
+  try {
+    const u = new URL(raw);
+    return String(u.host || '').trim().toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
 function hostMatches(host, rule) {
   const h = String(host || '').toLowerCase().trim();
   const r = String(rule || '').toLowerCase().trim();
@@ -83,12 +94,19 @@ function hostMatches(host, rule) {
 }
 
 function isStagingAdminHost(req) {
-  const host = requestHost(req);
+  const candidates = [
+    requestHost(req),
+    hostFromUrlHeader(req, 'origin'),
+    hostFromUrlHeader(req, 'referer'),
+  ].filter(Boolean);
   const configured = String(process.env.STAGING_ADMIN_HOST || 'staging.status.medcurity.com')
     .split(',')
     .map((x) => x.trim())
     .filter(Boolean);
-  return configured.some((rule) => hostMatches(host, rule));
+  for (const c of candidates) {
+    if (configured.some((rule) => hostMatches(c, rule))) return true;
+  }
+  return false;
 }
 
 function hostAllowedForAdmin(req) {
