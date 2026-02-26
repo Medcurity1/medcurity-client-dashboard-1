@@ -66,10 +66,9 @@
       const qp = new URLSearchParams(location.search);
       const CLIENT_HOST = 'status.medcurity.com';
       const STAGING_HOST = 'staging.status.medcurity.com';
-      const ADMIN_KEY_STORE = 'medcurity_admin_api_key';
       const host = String(location.hostname || '').toLowerCase();
-      const isClientHost = host === CLIENT_HOST || host.endsWith(`.${CLIENT_HOST}`);
       const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
+      const isClientHost = (host === CLIENT_HOST || host.endsWith(`.${CLIENT_HOST}`)) && !isStagingHost;
       let key = qp.get('key') || '';
       const CLIENT_BASE = 'https://status.medcurity.com';
       const FILTER_KEY = 'medcurity_admin_filters_v2';
@@ -248,7 +247,7 @@
         host.innerHTML = keys.map((quarter) => {
           const items = grouped[quarter].slice().sort((a, b) => String(a.task_name || '').localeCompare(String(b.task_name || ''), undefined, { sensitivity: 'base' }));
           const body = items.map((p) => {
-            const adminLink = `/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}&mode=admin&key=${encodeURIComponent(key)}`;
+            const adminLink = `/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}&mode=admin${key ? `&key=${encodeURIComponent(key)}` : ''}`;
             const clientLink = `${CLIENT_BASE}/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}`;
             return `<tr>
               <td><a href="${adminLink}">${esc(p.task_name)}</a><br/><a class="mini-link" href="${clientLink}" target="_blank" rel="noreferrer">Client Link</a></td>
@@ -314,34 +313,17 @@
       }
 
       async function init() {
-        if (isClientHost && !isStagingHost) {
+        if (isClientHost) {
           document.body.innerHTML = `<main class="page"><section class="panel"><h2>Not available on client domain</h2><p>Use staging for admin pages.</p></section></main>`;
           return;
         }
-        if (!key) {
-          const saved = localStorage.getItem(ADMIN_KEY_STORE) || '';
-          if (saved) key = saved;
-        }
-        if (!key) {
-          const entered = window.prompt('Enter admin key for this dashboard:') || '';
-          key = entered.trim();
-          if (key) localStorage.setItem(ADMIN_KEY_STORE, key);
-        }
-        if (!key) {
-          document.body.innerHTML = `<main class="page"><section class="panel"><h2>Admin key required</h2><p>Open with ?key=... or enter key when prompted.</p></section></main>`;
-          return;
-        }
-        if (qp.get('key') !== key) {
-          const url = new URL(location.href);
-          url.searchParams.set('key', key);
-          history.replaceState(null, '', url.toString());
-        }
+        const keyQ = key ? `?key=${encodeURIComponent(key)}` : '';
+        document.getElementById('projectsLink').href = `/admin/projects${keyQ}`;
+        document.getElementById('metricsLink').href = `/admin/metrics${keyQ}`;
+        document.getElementById('refreshLink').href = `/admin/projects${keyQ}`;
 
-        document.getElementById('projectsLink').href = `/admin/projects?key=${encodeURIComponent(key)}`;
-        document.getElementById('metricsLink').href = `/admin/metrics?key=${encodeURIComponent(key)}`;
-        document.getElementById('refreshLink').href = `/admin/projects?key=${encodeURIComponent(key)}`;
-
-        const res = await fetch(`/api/projects?key=${encodeURIComponent(key)}`);
+        const apiUrl = key ? `/api/projects?key=${encodeURIComponent(key)}` : '/api/projects';
+        const res = await fetch(apiUrl);
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.detail || data.error || `Load failed (${res.status})`);
 

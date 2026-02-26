@@ -107,10 +107,9 @@
       const qp = new URLSearchParams(location.search);
       const CLIENT_HOST = 'status.medcurity.com';
       const STAGING_HOST = 'staging.status.medcurity.com';
-      const ADMIN_KEY_STORE = 'medcurity_admin_api_key';
       const host = String(location.hostname || '').toLowerCase();
-      const isClientHost = host === CLIENT_HOST || host.endsWith(`.${CLIENT_HOST}`);
       const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
+      const isClientHost = (host === CLIENT_HOST || host.endsWith(`.${CLIENT_HOST}`)) && !isStagingHost;
       let key = qp.get('key') || '';
       const FILTER_KEY = 'medcurity_metrics_filters_v2';
       let rows = [];
@@ -217,33 +216,16 @@
       }
 
       async function init() {
-        if (isClientHost && !isStagingHost) {
+        if (isClientHost) {
           document.body.innerHTML = `<main class="page"><section class="panel"><h2>Not available on client domain</h2><p>Use staging for admin pages.</p></section></main>`;
           return;
         }
-        if (!key) {
-          const saved = localStorage.getItem(ADMIN_KEY_STORE) || '';
-          if (saved) key = saved;
-        }
-        if (!key) {
-          const entered = window.prompt('Enter admin key for this dashboard:') || '';
-          key = entered.trim();
-          if (key) localStorage.setItem(ADMIN_KEY_STORE, key);
-        }
-        if (!key) {
-          document.body.innerHTML = `<main class="page"><section class="panel"><h2>Admin key required</h2><p>Open with ?key=... or enter key when prompted.</p></section></main>`;
-          return;
-        }
-        if (qp.get('key') !== key) {
-          const url = new URL(location.href);
-          url.searchParams.set('key', key);
-          history.replaceState(null, '', url.toString());
-        }
+        const keyQ = key ? `?key=${encodeURIComponent(key)}` : '';
+        document.getElementById('projectsLink').href = `/admin/projects${keyQ}`;
+        document.getElementById('metricsLink').href = `/admin/metrics${keyQ}`;
 
-        document.getElementById('projectsLink').href = `/admin/projects?key=${encodeURIComponent(key)}`;
-        document.getElementById('metricsLink').href = `/admin/metrics?key=${encodeURIComponent(key)}`;
-
-        const res = await fetch(`/api/metrics?key=${encodeURIComponent(key)}`);
+        const apiUrl = key ? `/api/metrics?key=${encodeURIComponent(key)}` : '/api/metrics';
+        const res = await fetch(apiUrl);
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.detail || data.error || `Load failed (${res.status})`);
 

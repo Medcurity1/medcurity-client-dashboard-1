@@ -52,7 +52,7 @@
       const host = String(location.hostname || '').toLowerCase();
       const isLocalHost = host === 'localhost' || host === '127.0.0.1' || /^192\.168\./.test(host);
       const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
-      const canEdit = !!key && (isStagingHost || isLocalHost);
+      const canEdit = isStagingHost || isLocalHost;
       let currentDashboard = null;
 
       function esc(value) {
