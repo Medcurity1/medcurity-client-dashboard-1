@@ -17,17 +17,29 @@ This version is rewritten for Azure Static Web Apps:
 - `CLIENT_LINK_SECRET`
 - `ADMIN_API_KEY`
 - `CLICKUP_FIELD_MAP_JSON`
+- `AZURE_SQL_CONNECTION_STRING`
 
 ## Recommended Environment Variables
 - `CLIENT_PUBLIC_BASE_URL=https://status.medcurity.com`
 - `ADMIN_ALLOWED_HOSTS=staging.status.medcurity.com,localhost,127.0.0.1`
+- `STAGING_ADMIN_HOST=staging.status.medcurity.com`
+- `ADMIN_BYPASS_KEY_ON_STAGING=true`
 
-## Shared ECD Override Backend (for live updates across all users)
-If you want ECD overrides to sync for everyone (not browser-local only), set:
-- `ECD_OVERRIDES_STORAGE_CONNECTION_STRING=<Azure Storage connection string>`
-- `ECD_OVERRIDES_TABLE=EcdOverrides` (optional; default is `EcdOverrides`)
+## Azure SQL Backend
+The API now uses Azure SQL for shared dashboard persistence:
+- ECD overrides
+- audit event history
+- generated client link tracking
 
-When unset, ECD overrides fall back to browser local storage only.
+Schema bootstrap script:
+- `api/sql/bootstrap.sql`
+
+The app also auto-creates these tables on first SQL connection:
+- `dbo.ecd_overrides`
+- `dbo.audit_events`
+- `dbo.client_links`
+
+If `AZURE_SQL_CONNECTION_STRING` is unset, the UI falls back to browser-local ECD overrides only.
 
 ## Azure Static Web App Build Settings
 - App location: `app`

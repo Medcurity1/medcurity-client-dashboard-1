@@ -1,7 +1,7 @@
 const { app } = require('@azure/functions');
 const { fetchListRows, updateCustomField, fetchLatestTaskComment } = require('../shared/clickup');
 const { isAdmin, sign, parseUSDate, dateDiffBusinessDays, quarterLabel, parseFieldMap } = require('../shared/utils');
-const { hasStorageConfig, getOverrides, replaceOverrides } = require('../shared/ecdOverrides');
+const { hasSqlConfig, getOverrides, replaceOverrides, recordAuditEvent, upsertClientLink } = require('../shared/dashboardStore');
 const fs = require('fs');
 const path = require('path');
 
@@ -21,6 +21,12 @@ function getClientBaseUrl() {
   const raw = String(process.env.CLIENT_PUBLIC_BASE_URL || '').trim();
   if (!raw) return '';
   return raw.replace(/\/+$/, '');
+}
+
+function requestActor(req) {
+  const host = String((req.headers?.get && req.headers.get('x-forwarded-host')) || (req.headers?.get && req.headers.get('host')) || '').trim();
+  if (host) return host;
+  return 'dashboard_admin';
 }
 
 function metricKeyAliases(metricKey) {
@@ -1000,11 +1006,13 @@ app.http('generateLink', {
       const signature = sign(sfId);
       const relative = `/status?sf_id=${encodeURIComponent(sfId)}&sig=${signature}`;
       const base = getClientBaseUrl();
+      const clientUrl = base ? `${base}${relative}` : relative;
+      await upsertClientLink({ sfId, signature, clientUrl }).catch(() => {});
       return json(200, {
         sf_id: sfId,
         signature,
         relative_status_url: relative,
-        client_status_url: base ? `${base}${relative}` : relative,
+        client_status_url: clientUrl,
       });
     } catch (err) {
       ctx.error(err);
@@ -1025,7 +1033,7 @@ app.http('ecdOverrides', {
         const sig = String(req.query.get('sig') || '').trim();
         if (!sfId || sig !== sign(sfId)) return json(403, { error: 'forbidden' });
         const overrides = await getOverrides(sfId);
-        return json(200, { enabled: hasStorageConfig(), sf_id: sfId, overrides: overrides || {} });
+        return json(200, { enabled: hasSqlConfig(), sf_id: sfId, overrides: overrides || {} });
       }
 
       if (!isAdmin({ query: Object.fromEntries(req.query.entries()), headers: req.headers })) {
@@ -1036,8 +1044,14 @@ app.http('ecdOverrides', {
       const sig = String(body.sig || '').trim();
       const overrides = body.overrides && typeof body.overrides === 'object' ? body.overrides : {};
       if (!sfId || sig !== sign(sfId)) return json(400, { error: 'invalid_payload' });
-      const ok = await replaceOverrides(sfId, overrides);
+      const ok = await replaceOverrides(sfId, overrides, requestActor(req));
       if (!ok) return json(200, { enabled: false, sf_id: sfId, saved: false });
+      await recordAuditEvent({
+        sfId,
+        eventType: 'ecd_overrides_replace',
+        actor: requestActor(req),
+        metadata: { override_count: Object.keys(overrides || {}).length },
+      }).catch(() => {});
       return json(200, { enabled: true, sf_id: sfId, saved: true });
     } catch (err) {
       ctx.error(err);
@@ -1074,6 +1088,12 @@ app.http('update', {
       if (!fieldId && !isEcdMetric) return json(400, { error: 'field_not_mapped', metric_key: metricKey });
 
       const clickupValue = value ? toClickupMsFromYmd(value) : null;
+      const priorValue = String(
+        row.metrics?.[metricKey] ||
+        row.metrics?.[metricKey.replace(/\.date$/i, '.acd')] ||
+        row.metrics?.[metricKey.replace(/\.acd$/i, '.date')] ||
+        ''
+      ).trim();
       if (fieldId) {
         await updateCustomField(row.task_id, fieldId, clickupValue);
       }
@@ -1134,6 +1154,21 @@ app.http('update', {
           }
         }
       }
+      await recordAuditEvent({
+        sfId,
+        taskId: row.task_id,
+        eventType: isEcdMetric ? 'ecd_update' : 'acd_update',
+        metricKey,
+        oldValue: priorValue || null,
+        newValue: value || null,
+        actor: requestActor(req),
+        metadata: {
+          adjust_following: adjustFollowing,
+          clickup_field_mapped: !!fieldId,
+          local_only: !fieldId && isEcdMetric,
+        },
+      }).catch(() => {});
+
       return json(200, { ok: true, local_only: !fieldId && isEcdMetric });
     } catch (err) {
       ctx.error(err);
