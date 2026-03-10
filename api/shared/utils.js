@@ -122,13 +122,16 @@ function hostAllowedForAdmin(req) {
 }
 
 function isAdmin(req) {
+  const configured = (process.env.ADMIN_API_KEY || '').trim();
+  const provided = String(req.query.key || readHeader(req.headers, 'x-api-key') || '').trim();
+  // Always allow a valid admin key, even when forwarded host headers are inconsistent.
+  if (configured && provided === configured) return true;
+
   if (!hostAllowedForAdmin(req)) return false;
   const bypassOnStaging = String(process.env.ADMIN_BYPASS_KEY_ON_STAGING || 'true').trim().toLowerCase() === 'true';
   if (bypassOnStaging && isStagingAdminHost(req)) return true;
-  const configured = (process.env.ADMIN_API_KEY || '').trim();
   if (!configured) return true;
-  const provided = String(req.query.key || readHeader(req.headers, 'x-api-key') || '').trim();
-  return provided === configured;
+  return false;
 }
 
 module.exports = {
