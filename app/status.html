@@ -54,6 +54,8 @@
       const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
       // Read-only by default for client links. Editing is enabled only in explicit admin mode.
       const canEdit = (isStagingHost || isLocalHost) && mode === 'admin';
+      const allowLocalOverrideFallback = isLocalHost;
+      let overridesBackend = 'none';
       let currentDashboard = null;
 
       function esc(value) {
@@ -100,9 +102,11 @@
         try {
           const res = await fetch(`/api/ecdOverrides?sf_id=${encodeURIComponent(sfId)}&sig=${encodeURIComponent(sig)}`);
           const data = await res.json().catch(() => ({}));
-          if (!res.ok || !data || !data.enabled) return null;
+          if (!res.ok || !data) return null;
+          overridesBackend = String(data.backend || 'none');
+          if (!data.enabled) return { enabled: false, backend: overridesBackend, overrides: {} };
           const overrides = data.overrides && typeof data.overrides === 'object' ? data.overrides : {};
-          return overrides;
+          return { enabled: true, backend: overridesBackend, overrides };
         } catch (_) {
           return null;
         }
@@ -121,6 +125,7 @@
           });
           if (!res.ok) return false;
           const data = await res.json().catch(() => ({}));
+          overridesBackend = String(data.backend || overridesBackend || 'none');
           return !!(data && data.enabled && data.saved);
         } catch (_) {
           return false;
@@ -459,8 +464,11 @@
             const fallbackSnapshot = currentDashboard ? collectFollowingEcdSnapshot(currentDashboard, form.dataset.metricKey || '') : {};
             Object.assign(overrides, fallbackSnapshot, domSnapshot);
           }
-          saveEcdOverrides(overrides);
-          await saveServerEcdOverrides(overrides);
+          if (allowLocalOverrideFallback) saveEcdOverrides(overrides);
+          const saved = await saveServerEcdOverrides(overrides);
+          if (!saved && !allowLocalOverrideFallback) {
+            throw new Error('Azure SQL override save failed.');
+          }
           await sendUpdate(form, adjustFollowing);
           location.reload();
         } catch (err) {
@@ -485,8 +493,11 @@
               if (String(v || '').trim()) overrides[k] = v;
               else delete overrides[k];
             }
-            saveEcdOverrides(overrides);
-            await saveServerEcdOverrides(overrides);
+            if (allowLocalOverrideFallback) saveEcdOverrides(overrides);
+            const saved = await saveServerEcdOverrides(overrides);
+            if (!saved && !allowLocalOverrideFallback) {
+              throw new Error('Azure SQL override save failed.');
+            }
           }
           location.reload();
         } catch (err) {
@@ -641,9 +652,17 @@
 
         const dashboard = data.dashboard || {};
         currentDashboard = dashboard;
-        const serverOverrides = await fetchServerEcdOverrides();
-        if (serverOverrides) saveEcdOverrides(serverOverrides);
-        applyStoredEcdOverrides(dashboard, serverOverrides || loadEcdOverrides());
+        const serverState = await fetchServerEcdOverrides();
+        const sqlEnabled = serverState && serverState.enabled && String(serverState.backend || '').toLowerCase() === 'azure_sql';
+        if (sqlEnabled) {
+          applyStoredEcdOverrides(dashboard, serverState.overrides || {});
+        } else {
+          if (serverState && !allowLocalOverrideFallback) {
+            showInlineNotice('Azure SQL overrides are not enabled. Configure AZURE_SQL_CONNECTION_STRING.');
+          }
+          const localOverrides = allowLocalOverrideFallback ? loadEcdOverrides() : {};
+          applyStoredEcdOverrides(dashboard, localOverrides);
+        }
         const details = dashboard.project_details || {};
         document.getElementById('projectDetails').innerHTML = Object.entries(details)
           .map(([label, value]) => `<article class="detail-item"><p class="label">${iconForLabel(label)}${esc(label)}</p><p class="value">${esc(value || 'Not set')}</p></article>`)

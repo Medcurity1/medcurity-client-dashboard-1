@@ -1,7 +1,14 @@
 const { app } = require('@azure/functions');
 const { fetchListRows, updateCustomField, fetchLatestTaskComment } = require('../shared/clickup');
 const { isAdmin, sign, parseUSDate, dateDiffBusinessDays, quarterLabel, parseFieldMap } = require('../shared/utils');
-const { hasSqlConfig, getOverrides, replaceOverrides, recordAuditEvent, upsertClientLink } = require('../shared/dashboardStore');
+const {
+  hasSqlConfig,
+  getOverrides,
+  replaceOverrides,
+  recordAuditEvent,
+  upsertClientLink,
+  storageHealth,
+} = require('../shared/dashboardStore');
 const fs = require('fs');
 const path = require('path');
 
@@ -1033,7 +1040,12 @@ app.http('ecdOverrides', {
         const sig = String(req.query.get('sig') || '').trim();
         if (!sfId || sig !== sign(sfId)) return json(403, { error: 'forbidden' });
         const overrides = await getOverrides(sfId);
-        return json(200, { enabled: hasSqlConfig(), sf_id: sfId, overrides: overrides || {} });
+        return json(200, {
+          enabled: hasSqlConfig(),
+          backend: hasSqlConfig() ? 'azure_sql' : 'none',
+          sf_id: sfId,
+          overrides: overrides || {},
+        });
       }
 
       if (!isAdmin({ query: Object.fromEntries(req.query.entries()), headers: req.headers })) {
@@ -1045,14 +1057,32 @@ app.http('ecdOverrides', {
       const overrides = body.overrides && typeof body.overrides === 'object' ? body.overrides : {};
       if (!sfId || sig !== sign(sfId)) return json(400, { error: 'invalid_payload' });
       const ok = await replaceOverrides(sfId, overrides, requestActor(req));
-      if (!ok) return json(200, { enabled: false, sf_id: sfId, saved: false });
+      if (!ok) return json(200, { enabled: false, backend: 'none', sf_id: sfId, saved: false });
       await recordAuditEvent({
         sfId,
         eventType: 'ecd_overrides_replace',
         actor: requestActor(req),
         metadata: { override_count: Object.keys(overrides || {}).length },
       }).catch(() => {});
-      return json(200, { enabled: true, sf_id: sfId, saved: true });
+      return json(200, { enabled: true, backend: 'azure_sql', sf_id: sfId, saved: true });
+    } catch (err) {
+      ctx.error(err);
+      return json(500, { error: 'server_error', detail: String(err.message || err) });
+    }
+  },
+});
+
+app.http('storageHealth', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'storageHealth',
+  handler: async (req, ctx) => {
+    try {
+      if (!isAdmin({ query: Object.fromEntries(req.query.entries()), headers: req.headers })) {
+        return json(401, { error: 'unauthorized' });
+      }
+      const health = await storageHealth();
+      return json(200, health);
     } catch (err) {
       ctx.error(err);
       return json(500, { error: 'server_error', detail: String(err.message || err) });

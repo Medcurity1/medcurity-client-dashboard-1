@@ -9,6 +9,7 @@ This version is rewritten for Azure Static Web Apps:
 - `/admin/metrics?key=...`
 - `/status?sf_id=...&sig=...`
 - `/api/generateLink?sf_id=...&key=...` (returns signed client URL)
+- `/api/storageHealth?key=...` (confirms Azure SQL connectivity and table counts)
 
 ## Required Environment Variables (Static Web App > Configuration)
 - `CLICKUP_API_TOKEN`
@@ -39,7 +40,9 @@ The app also auto-creates these tables on first SQL connection:
 - `dbo.audit_events`
 - `dbo.client_links`
 
-If `AZURE_SQL_CONNECTION_STRING` is unset, the UI falls back to browser-local ECD overrides only.
+If `AZURE_SQL_CONNECTION_STRING` is unset:
+- hosted environments are read-only for ECD override persistence
+- local (`localhost`) can still use browser-local fallback for development only
 
 ## Azure Static Web App Build Settings
 - App location: `app`

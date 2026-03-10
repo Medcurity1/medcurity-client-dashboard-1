@@ -172,11 +172,42 @@ async function upsertClientLink({ sfId, signature, clientUrl }) {
   return true;
 }
 
+async function storageHealth() {
+  if (!hasSqlConfig()) {
+    return {
+      sql_enabled: false,
+      backend: 'none',
+      connected: false,
+      schema_ready: false,
+      tables: {},
+    };
+  }
+
+  const pool = await getPool();
+  const [overrides, audits, links] = await Promise.all([
+    pool.request().query('SELECT COUNT(1) AS total FROM dbo.ecd_overrides;'),
+    pool.request().query('SELECT COUNT(1) AS total FROM dbo.audit_events;'),
+    pool.request().query('SELECT COUNT(1) AS total FROM dbo.client_links;'),
+  ]);
+
+  return {
+    sql_enabled: true,
+    backend: 'azure_sql',
+    connected: true,
+    schema_ready: true,
+    tables: {
+      ecd_overrides: Number(overrides.recordset?.[0]?.total || 0),
+      audit_events: Number(audits.recordset?.[0]?.total || 0),
+      client_links: Number(links.recordset?.[0]?.total || 0),
+    },
+  };
+}
+
 module.exports = {
   hasSqlConfig,
   getOverrides,
   replaceOverrides,
   recordAuditEvent,
   upsertClientLink,
+  storageHealth,
 };
-
