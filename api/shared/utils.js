@@ -127,9 +127,11 @@ function isAdmin(req) {
   // Always allow a valid admin key, even when forwarded host headers are inconsistent.
   if (configured && provided === configured) return true;
 
-  if (!hostAllowedForAdmin(req)) return false;
   const bypassOnStaging = String(process.env.ADMIN_BYPASS_KEY_ON_STAGING || 'true').trim().toLowerCase() === 'true';
+  // Evaluate staging bypass before strict host checks because Azure forwarding can rewrite host headers.
   if (bypassOnStaging && isStagingAdminHost(req)) return true;
+
+  if (!hostAllowedForAdmin(req)) return false;
   if (!configured) return true;
   return false;
 }
