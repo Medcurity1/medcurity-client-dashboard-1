@@ -70,7 +70,8 @@
       const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
       const isClientHost = (host === CLIENT_HOST || host.endsWith(`.${CLIENT_HOST}`)) && !isStagingHost;
       let key = qp.get('key') || '';
-      const CLIENT_BASE = 'https://status.medcurity.com';
+      // While staging is being validated, keep client links on the same host to avoid cross-domain API mismatch.
+      const CLIENT_BASE = isStagingHost ? '' : 'https://status.medcurity.com';
       const FILTER_KEY = 'medcurity_admin_filters_v2';
       let projects = [];
 

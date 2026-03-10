@@ -609,10 +609,17 @@
         }
 
         const res = await fetch(`/api/status?sf_id=${encodeURIComponent(sfId)}&sig=${encodeURIComponent(sig)}`);
-        const data = await res.json().catch(() => ({}));
+        const contentType = String(res.headers.get('content-type') || '').toLowerCase();
+        const data = contentType.includes('application/json')
+          ? await res.json().catch(() => ({}))
+          : {};
 
         if (!res.ok) {
           document.body.innerHTML = `<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(data.detail || data.error || res.status)}</p></section></main>`;
+          return;
+        }
+        if (!contentType.includes('application/json')) {
+          document.body.innerHTML = '<main class="page"><section class="panel"><h2>Load failed</h2><p>Client API returned HTML instead of JSON. Check custom-domain routing for /api.</p></section></main>';
           return;
         }
 
@@ -622,7 +629,8 @@
           if (canEdit) {
             const vt = document.getElementById('viewToggle');
             vt.style.display = '';
-            const clientBase = isStagingHost ? 'https://status.medcurity.com' : '';
+            // Keep client preview on staging host when opened from staging admin.
+            const clientBase = isStagingHost ? '' : 'https://status.medcurity.com';
             const clientPath = `/status?sf_id=${encodeURIComponent(sfId)}&sig=${encodeURIComponent(sig)}`;
             vt.href = `${clientBase}${clientPath}`;
           }
