@@ -117,7 +117,18 @@ async function updateCustomField(taskId, fieldId, value) {
   });
 }
 
+async function fetchLatestTaskComment(taskId) {
+  const data = await fetchJson(`/task/${taskId}/comment`);
+  const comments = Array.isArray(data.comments) ? data.comments : [];
+  if (!comments.length) return '';
+
+  comments.sort((a, b) => Number(b.date || 0) - Number(a.date || 0));
+  const latest = comments[0] || {};
+  return String(latest.comment_text || '').trim();
+}
+
 module.exports = {
   fetchListRows,
   updateCustomField,
+  fetchLatestTaskComment,
 };

@@ -64,11 +64,76 @@ function sign(sfId) {
   return crypto.createHmac('sha256', secret).update(String(sfId)).digest('hex');
 }
 
+function readHeader(headers, key) {
+  if (!headers) return '';
+  if (typeof headers.get === 'function') return String(headers.get(key) || '').trim();
+  return String(headers[key] || headers[String(key).toLowerCase()] || '').trim();
+}
+
+function requestHost(req) {
+  const host = readHeader(req.headers, 'x-forwarded-host') || readHeader(req.headers, 'host');
+  return String(host || '').trim().toLowerCase().split(',')[0].trim();
+}
+
+function hostFromUrlHeader(req, headerName) {
+  const raw = readHeader(req.headers, headerName);
+  if (!raw) return '';
+  try {
+    const u = new URL(raw);
+    return String(u.host || '').trim().toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function hostMatches(host, rule) {
+  const h = String(host || '').toLowerCase().trim();
+  const r = String(rule || '').toLowerCase().trim();
+  if (!h || !r) return false;
+  return h === r || h.startsWith(`${r}:`);
+}
+
+function isStagingAdminHost(req) {
+  const candidates = [
+    requestHost(req),
+    hostFromUrlHeader(req, 'origin'),
+    hostFromUrlHeader(req, 'referer'),
+  ].filter(Boolean);
+  const configured = String(process.env.STAGING_ADMIN_HOST || 'staging.status.medcurity.com')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean);
+  for (const c of candidates) {
+    if (configured.some((rule) => hostMatches(c, rule))) return true;
+  }
+  return false;
+}
+
+function hostAllowedForAdmin(req) {
+  const allowRaw = String(process.env.ADMIN_ALLOWED_HOSTS || '').trim();
+  if (!allowRaw) return true;
+  const host = requestHost(req);
+  if (!host) return false;
+  const allowed = allowRaw
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+  return allowed.some((h) => host === h || host.startsWith(`${h}:`));
+}
+
 function isAdmin(req) {
   const configured = (process.env.ADMIN_API_KEY || '').trim();
+  const provided = String(req.query.key || readHeader(req.headers, 'x-api-key') || '').trim();
+  // Always allow a valid admin key, even when forwarded host headers are inconsistent.
+  if (configured && provided === configured) return true;
+
+  const bypassOnStaging = String(process.env.ADMIN_BYPASS_KEY_ON_STAGING || 'true').trim().toLowerCase() === 'true';
+  // Evaluate staging bypass before strict host checks because Azure forwarding can rewrite host headers.
+  if (bypassOnStaging && isStagingAdminHost(req)) return true;
+
+  if (!hostAllowedForAdmin(req)) return false;
   if (!configured) return true;
-  const provided = (req.query.key || req.headers['x-api-key'] || '').trim();
-  return provided === configured;
+  return false;
 }
 
 module.exports = {

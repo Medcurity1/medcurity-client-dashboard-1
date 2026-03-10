@@ -1,1 +1,40 @@
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Medcurity Client Dashboard</title><link rel='stylesheet' href='/styles.css'></head><body><main><div class='card'><h1>Medcurity Client Dashboard</h1><p>Select a section.</p><p><a href='/admin/projects'>Admin Projects</a> | <a href='/admin/metrics'>Admin Metrics</a></p></div></main></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Medcurity Client Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="panel" id="landingCard">
+        <h1>Medcurity Client Dashboard</h1>
+        <p id="landingText"></p>
+        <p id="landingLinks"></p>
+      </section>
+    </main>
+
+    <script>
+      const CLIENT_HOST = 'status.medcurity.com';
+      const STAGING_HOST = 'staging.status.medcurity.com';
+      const host = String(location.hostname || '').toLowerCase();
+      const isClientHost = host === CLIENT_HOST || host.endsWith(`.${CLIENT_HOST}`);
+      const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
+      const qp = new URLSearchParams(location.search);
+      const key = qp.get('key') || '';
+
+      const txt = document.getElementById('landingText');
+      const links = document.getElementById('landingLinks');
+
+      if (isClientHost && !isStagingHost) {
+        txt.textContent = 'Use your unique client status link that includes your SF ID signature.';
+        links.innerHTML = '';
+      } else {
+        txt.textContent = 'Open admin pages from staging.';
+        links.innerHTML = `<a href="/admin/projects${key ? `?key=${encodeURIComponent(key)}` : ''}">Admin Projects</a> | <a href="/admin/metrics${key ? `?key=${encodeURIComponent(key)}` : ''}">Admin Metrics</a>`;
+      }
+    </script>
+  </body>
+</html>
+

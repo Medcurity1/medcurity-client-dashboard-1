@@ -1,3 +1,297 @@
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Admin Metrics</title><link rel='stylesheet' href='/styles.css'></head><body><main><div class='card'><h1>Admin Metrics</h1><p><a id='projectsLink' href='/admin/projects'>Projects</a></p><div class='grid' id='top'></div></div><div class='card'><h2>Quarterly</h2><table class='table' id='tbl'><thead><tr><th>Quarter</th><th>Closures</th><th>Avg Close Days</th></tr></thead><tbody></tbody></table></div></main><script>
-const q=new URLSearchParams(location.search);const key=q.get('key')||'';document.getElementById('projectsLink').href='/admin/projects?key='+encodeURIComponent(key);fetch(`/api/admin/metrics?key=${encodeURIComponent(key)}`).then(r=>r.json()).then(d=>{document.getElementById('top').innerHTML=`<div class='metric'><div class='muted'>Tracked Closures</div><div>${d.total_tracked_closures||0}</div></div><div class='metric'><div class='muted'>Avg Close Days</div><div>${d.avg_close_days||0}</div></div>`;const tb=document.querySelector('#tbl tbody');(d.quarters||[]).forEach(x=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${x.quarter}</td><td>${x.count}</td><td>${x.avg_close_days}</td>`;tb.appendChild(tr);});}).catch(e=>{document.body.innerHTML='<main><div class=card><h2>Load failed</h2><p>'+String(e)+'</p></div></main>'});
-</script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Metrics</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <aside class="admin-side-menu">
+      <h3>Admin Menu</h3>
+      <a class="admin-nav-link" id="projectsLink" href="#">Projects</a>
+      <a class="admin-nav-link" id="metricsLink" href="#">Metrics</a>
+    </aside>
+
+    <main class="page">
+      <header class="top">
+        <h1>Admin Metrics</h1>
+        <p id="countLabel">0 closed track records</p>
+      </header>
+
+      <section class="panel">
+        <div class="admin-controls">
+          <input id="metricSearch" class="project-search" type="search" placeholder="Search by company..." oninput="renderRows()" />
+
+          <div class="status-multiselect" id="quarterFilterControl">
+            <button type="button" id="quarterFilterToggle" class="project-filter status-toggle" onclick="togglePanel('quarterFilterPanel')">All quarters</button>
+            <div id="quarterFilterPanel" class="status-filter-panel" hidden>
+              <div id="quarterFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearGroup('quarterFilter')">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('quarterFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="status-multiselect" id="trackFilterControl">
+            <button type="button" id="trackFilterToggle" class="project-filter status-toggle" onclick="togglePanel('trackFilterPanel')">All tracks</button>
+            <div id="trackFilterPanel" class="status-filter-panel" hidden>
+              <div id="trackFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearGroup('trackFilter')">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('trackFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="status-multiselect" id="sourceFilterControl">
+            <button type="button" id="sourceFilterToggle" class="project-filter status-toggle" onclick="togglePanel('sourceFilterPanel')">All sources</button>
+            <div id="sourceFilterPanel" class="status-filter-panel" hidden>
+              <div id="sourceFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearGroup('sourceFilter')">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('sourceFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Core Metrics</h2>
+        <p class="admin-summary" id="coreSummary"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Data Quality</h2>
+        <p class="admin-summary" id="qualitySummary"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Average Close Days By Quarter</h2>
+        <table class="admin-table" id="quarterTable">
+          <thead>
+            <tr>
+              <th>Quarter</th>
+              <th>Projects</th>
+              <th>Avg Close Days</th>
+              <th>SRA Avg</th>
+              <th>NVA Avg</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Closed Record Details</h2>
+        <table class="admin-table" id="detailsTable">
+          <thead>
+            <tr>
+              <th>Company</th>
+              <th>Track</th>
+              <th>Quarter</th>
+              <th>Close Days</th>
+              <th>Source</th>
+              <th>Kickoff</th>
+              <th>Final</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script>
+      const qp = new URLSearchParams(location.search);
+      const CLIENT_HOST = 'status.medcurity.com';
+      const STAGING_HOST = 'staging.status.medcurity.com';
+      const host = String(location.hostname || '').toLowerCase();
+      const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
+      const isClientHost = (host === CLIENT_HOST || host.endsWith(`.${CLIENT_HOST}`)) && !isStagingHost;
+      let key = qp.get('key') || '';
+      const FILTER_KEY = 'medcurity_metrics_filters_v2';
+      let rows = [];
+
+      function esc(v) { return String(v || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])); }
+      function norm(v) { return String(v || '').trim().toLowerCase(); }
+
+      function togglePanel(id) {
+        const panel = document.getElementById(id);
+        if (!panel) return;
+        panel.hidden = !panel.hidden;
+      }
+
+      function closePanel(id) {
+        const panel = document.getElementById(id);
+        if (panel) panel.hidden = true;
+      }
+
+      function selected(groupId) {
+        return Array.from(document.querySelectorAll(`#${groupId} input[type='checkbox']:checked`)).map((x) => norm(x.value));
+      }
+
+      function updateToggleLabel(toggleId, values, emptyText) {
+        const el = document.getElementById(toggleId);
+        if (!el) return;
+        el.textContent = values.length === 0 ? emptyText : `${values.length} selected`;
+      }
+
+      function clearGroup(groupId) {
+        document.querySelectorAll(`#${groupId} input[type='checkbox']`).forEach((x) => { x.checked = false; });
+        renderRows();
+      }
+
+      function buildFilterOptions(groupId, values) {
+        const host = document.getElementById(groupId);
+        host.innerHTML = values.map((v) => `<label class="status-filter-option"><input type="checkbox" value="${esc(v)}" onchange="renderRows()" /><span>${esc(v)}</span></label>`).join('');
+      }
+
+      function saveFilters() {
+        const state = {
+          search: (document.getElementById('metricSearch') || {}).value || '',
+          quarters: selected('quarterFilter'),
+          tracks: selected('trackFilter'),
+          sources: selected('sourceFilter')
+        };
+        try { localStorage.setItem(FILTER_KEY, JSON.stringify(state)); } catch (_) {}
+      }
+
+      function loadFilters() {
+        try {
+          const raw = localStorage.getItem(FILTER_KEY) || '';
+          if (!raw) return {};
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (_) {
+          return {};
+        }
+      }
+
+      function renderRows() {
+        const query = norm((document.getElementById('metricSearch') || {}).value || '');
+        const qFilter = selected('quarterFilter');
+        const tFilter = selected('trackFilter');
+        const sFilter = selected('sourceFilter');
+
+        const filtered = rows.filter((row) => {
+          if (query && !norm(`${row.company} ${row.track} ${row.quarter} ${row.source} ${row.sf_id || ''}`).includes(query)) return false;
+          if (qFilter.length && !qFilter.includes(norm(row.quarter))) return false;
+          if (tFilter.length && !tFilter.includes(norm(row.track))) return false;
+          if (sFilter.length && !sFilter.includes(norm(row.source))) return false;
+          return true;
+        });
+
+        document.getElementById('countLabel').textContent = `${filtered.length} closed track records`;
+
+        const body = filtered.map((row) => `<tr>
+          <td>${esc(row.company)}</td>
+          <td>${esc(row.track)}</td>
+          <td>${esc(row.quarter)}</td>
+          <td>${esc(row.days)}</td>
+          <td>${esc(row.source || '')}</td>
+          <td>${esc(row.kickoff_date || '')}</td>
+          <td>${esc(row.final_date || '')}</td>
+        </tr>`).join('');
+
+        document.querySelector('#detailsTable tbody').innerHTML = body || '<tr><td colspan="7">No records</td></tr>';
+
+        updateToggleLabel('quarterFilterToggle', qFilter, 'All quarters');
+        updateToggleLabel('trackFilterToggle', tFilter, 'All tracks');
+        updateToggleLabel('sourceFilterToggle', sFilter, 'All sources');
+        saveFilters();
+      }
+
+      function renderQuarterTable(quarters) {
+        const body = (quarters || []).map((q) => `<tr>
+          <td>${esc(q.quarter || '')}</td>
+          <td>${esc(q.count || 0)}</td>
+          <td>${esc(q.avg_close_days || 'N/A')}</td>
+          <td>${esc(q.avg_sra_days || 'N/A')}</td>
+          <td>${esc(q.avg_nva_days || 'N/A')}</td>
+        </tr>`).join('');
+
+        document.querySelector('#quarterTable tbody').innerHTML = body || '<tr><td colspan="5">No quarter data</td></tr>';
+      }
+
+      async function init() {
+        if (isClientHost) {
+          document.body.innerHTML = `<main class="page"><section class="panel"><h2>Not available on client domain</h2><p>Use staging for admin pages.</p></section></main>`;
+          return;
+        }
+        const keyQ = key ? `?key=${encodeURIComponent(key)}` : '';
+        document.getElementById('projectsLink').href = `/admin/projects${keyQ}`;
+        document.getElementById('metricsLink').href = `/admin/metrics${keyQ}`;
+
+        const apiUrl = key ? `/api/metrics?key=${encodeURIComponent(key)}` : '/api/metrics';
+        const res = await fetch(apiUrl);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.error || `Load failed (${res.status})`);
+
+        rows = data.rows || [];
+
+        const summary = data.summary || {};
+        document.getElementById('coreSummary').innerHTML = [
+          `Total Tracked Closures: ${summary.total_tracked_closures ?? 0}`,
+          `Overall Avg Close Days: ${summary.avg_close_days ?? 'N/A'}`,
+          `SRA Avg: ${summary.sra_avg_close_days ?? 'N/A'} (${summary.sra_count ?? 0})`,
+          `NVA Avg: ${summary.nva_avg_close_days ?? 'N/A'} (${summary.nva_count ?? 0})`,
+          `Tracked Avg (<=${summary.tracked_max_days ?? 120}): ${summary.tracked_avg_days ?? 'N/A'} (${summary.tracked_count ?? 0})`,
+          `Outliers: ${summary.untracked_outlier_count ?? 0}`,
+          `Historical Rows: ${summary.historical_count ?? 0}`,
+          `Live Rows: ${summary.live_count ?? 0}`
+        ].map((x) => `<span class="summary-pill">${esc(x)}</span>`).join('');
+
+        const quality = data.live_quality || {};
+        document.getElementById('qualitySummary').innerHTML = [
+          `Completed ClickUp Projects: ${quality.completed_task_total ?? 0}`,
+          `With Valid Close Dates: ${quality.completed_task_with_valid_close ?? 0}`,
+          `Coverage: ${summary.coverage_pct ?? 'N/A'}%`,
+          `Missing Date Projects: ${quality.completed_task_missing_close_dates ?? 0}`,
+          `Missing Covered By Historical: ${quality.missing_covered_by_historical ?? 0}`,
+          `Missing Uncovered: ${quality.missing_uncovered ?? 0}`,
+          `Missing SRA Date Rows: ${quality.missing_sra_dates ?? 0}`,
+          `Missing NVA Date Rows: ${quality.missing_nva_dates ?? 0}`
+        ].map((x) => `<span class="summary-pill">${esc(x)}</span>`).join('');
+
+        renderQuarterTable(data.quarters || []);
+
+        const allQuarters = [...new Set(rows.map((r) => r.quarter).filter(Boolean))].sort();
+        const allTracks = [...new Set(rows.map((r) => r.track).filter(Boolean))].sort();
+        const allSources = [...new Set(rows.map((r) => r.source).filter(Boolean))].sort();
+        buildFilterOptions('quarterFilter', allQuarters);
+        buildFilterOptions('trackFilter', allTracks);
+        buildFilterOptions('sourceFilter', allSources);
+
+        const saved = loadFilters();
+        if (typeof saved.search === 'string') {
+          document.getElementById('metricSearch').value = saved.search;
+        }
+
+        const qSet = new Set(saved.quarters || []);
+        const tSet = new Set(saved.tracks || []);
+        const sSet = new Set(saved.sources || []);
+
+        document.querySelectorAll('#quarterFilter input[type="checkbox"]').forEach((x) => { x.checked = qSet.has(norm(x.value)); });
+        document.querySelectorAll('#trackFilter input[type="checkbox"]').forEach((x) => { x.checked = tSet.has(norm(x.value)); });
+        document.querySelectorAll('#sourceFilter input[type="checkbox"]').forEach((x) => { x.checked = sSet.has(norm(x.value)); });
+
+        renderRows();
+      }
+
+      document.addEventListener('click', (evt) => {
+        ['quarterFilterControl', 'trackFilterControl', 'sourceFilterControl'].forEach((id) => {
+          const box = document.getElementById(id);
+          if (!box || box.contains(evt.target)) return;
+          const panel = box.querySelector('.status-filter-panel');
+          if (panel) panel.hidden = true;
+        });
+      });
+
+      init().catch((err) => {
+        document.body.innerHTML = `<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(err.message || err)}</p></section></main>`;
+      });
+    </script>
+  </body>
+</html>

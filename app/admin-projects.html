@@ -1,3 +1,366 @@
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Admin Projects</title><link rel='stylesheet' href='/styles.css'></head><body><main><div class='card'><h1>Admin Dashboard</h1><p><a href='/admin/metrics'+window.location.search>Metrics</a></p><table class='table' id='tbl'><thead><tr><th>Client</th><th>SF ID</th><th>Status</th><th>Updated</th></tr></thead><tbody></tbody></table></div></main><script>
-const params=new URLSearchParams(location.search);const key=params.get('key')||'';fetch(`/api/admin/projects?key=${encodeURIComponent(key)}`).then(r=>r.json()).then(data=>{const tb=document.querySelector('#tbl tbody');(data.projects||[]).forEach(p=>{const tr=document.createElement('tr');const href=`/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}&key=${encodeURIComponent(key)}&mode=admin`;tr.innerHTML=`<td><a href="${href}">${p.task_name||'Untitled'}</a></td><td>${p.sf_id}</td><td><span class='pill'>${p.task_status||''}</span></td><td>${p.source_updated_at||''}</td>`;tb.appendChild(tr);});}).catch(e=>{document.body.innerHTML='<main><div class=card><h2>Load failed</h2><p>'+String(e)+'</p></div></main>'});
-</script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <aside class="admin-side-menu">
+      <h3>Admin Menu</h3>
+      <a class="admin-nav-link" id="projectsLink" href="#">Projects</a>
+      <a class="admin-nav-link" id="metricsLink" href="#">Metrics</a>
+    </aside>
+
+    <main class="page">
+      <header class="top">
+        <h1>Admin Dashboard</h1>
+        <p id="countLabel">0 clients</p>
+      </header>
+
+      <section class="panel">
+        <div class="admin-controls">
+          <input id="projectSearch" class="project-search" type="search" placeholder="Search by client name or SF ID..." oninput="renderTables()" />
+
+          <div class="status-multiselect" id="statusFilterControl">
+            <button type="button" id="statusFilterToggle" class="project-filter status-toggle" onclick="togglePanel('statusFilterPanel')">All statuses</button>
+            <div id="statusFilterPanel" class="status-filter-panel" hidden>
+              <div id="statusFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearGroup('statusFilter')">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('statusFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="status-multiselect" id="leadFilterControl">
+            <button type="button" id="leadFilterToggle" class="project-filter status-toggle" onclick="togglePanel('leadFilterPanel')">All project leads</button>
+            <div id="leadFilterPanel" class="status-filter-panel" hidden>
+              <div id="leadFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearGroup('leadFilter')">Clear</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('leadFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
+
+          <a class="project-filter refresh-link" id="refreshLink" href="#">Refresh From ClickUp</a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2 id="activeHeader">Active Projects (0)</h2>
+        <p class="admin-summary" id="activeSummary"></p>
+        <div id="activeGroups"></div>
+      </section>
+
+      <section class="panel">
+        <h2 id="completedHeader">Completed Projects (0)</h2>
+        <p class="admin-summary" id="completedSummary"></p>
+        <div id="completedGroups"></div>
+      </section>
+    </main>
+
+    <script>
+      const qp = new URLSearchParams(location.search);
+      const CLIENT_HOST = 'status.medcurity.com';
+      const STAGING_HOST = 'staging.status.medcurity.com';
+      const host = String(location.hostname || '').toLowerCase();
+      const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
+      const isClientHost = (host === CLIENT_HOST || host.endsWith(`.${CLIENT_HOST}`)) && !isStagingHost;
+      let key = qp.get('key') || '';
+      // While staging is being validated, keep client links on the same host to avoid cross-domain API mismatch.
+      const CLIENT_BASE = isStagingHost ? '' : 'https://status.medcurity.com';
+      const FILTER_KEY = 'medcurity_admin_filters_v2';
+      let projects = [];
+
+      function esc(v) { return String(v || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])); }
+      function norm(v) { return String(v || '').trim().toLowerCase(); }
+      function displayStatus(v) {
+        return String(v || '')
+          .split(' ')
+          .filter(Boolean)
+          .map((s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())
+          .join(' ');
+      }
+
+      function parseUS(value) {
+        const m = String(value || '').match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+        if (!m) return null;
+        return new Date(Number(m[3]), Number(m[1]) - 1, Number(m[2]));
+      }
+
+      function formatUS(d) {
+        if (!d || Number.isNaN(d.getTime())) return 'Unknown';
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return `${mm}/${dd}/${yyyy}`;
+      }
+
+      function quarterLabel(d) {
+        if (!d || Number.isNaN(d.getTime())) return 'No Date';
+        const q = Math.floor(d.getMonth() / 3) + 1;
+        return `${d.getFullYear()} Q${q}`;
+      }
+
+      function quarterSortValue(label) {
+        const m = String(label || '').match(/^(\d{4}) Q([1-4])$/);
+        if (!m) return Number.MIN_SAFE_INTEGER;
+        return Number(m[1]) * 10 + Number(m[2]);
+      }
+
+      function normalizeProjects(raw) {
+        const normalized = raw.map((p) => {
+          const status = String(p.task_status || '');
+          const isCompleted = norm(status) === 'completed';
+
+          const created = parseUS(p.task_created_at);
+          const closed = parseUS(p.task_closed_at);
+          const sourceUpdated = parseUS(p.source_updated_at);
+          const sraFinal = parseUS(p.sra_final_date);
+          const nvaFinal = parseUS(p.nva_final_date);
+          const milestoneAnchor = sraFinal && nvaFinal ? (sraFinal > nvaFinal ? sraFinal : nvaFinal) : (sraFinal || nvaFinal);
+
+          let anchor = null;
+          if (isCompleted) anchor = milestoneAnchor || closed || sourceUpdated;
+          else anchor = created || sourceUpdated;
+
+          return {
+            ...p,
+            _isCompleted: isCompleted,
+            _periodLabel: quarterLabel(anchor),
+            _startLabel: isCompleted ? '-' : (created ? formatUS(created) : 'Unknown'),
+            _completedLabel: isCompleted ? (anchor ? formatUS(anchor) : 'Unknown') : '-',
+          };
+        });
+
+        // Match old version temporary business rules.
+        normalized.forEach((p) => {
+          if (!p._isCompleted) return;
+          const nameKey = String(p.task_name || '').trim().toLowerCase();
+          if (nameKey === 'acs') {
+            p._periodLabel = '2026 Q1';
+            p._completedLabel = '01/14/2026';
+          } else if (p._periodLabel === '2026 Q1') {
+            p._periodLabel = '2025 Q4';
+            p._completedLabel = '12/31/2025';
+          }
+        });
+
+        normalized.forEach((p) => {
+          if (p._isCompleted) return;
+          const nameKey = String(p.task_name || '').trim().toLowerCase();
+          if (nameKey.includes('overlake arthritis') || nameKey === 'the rose') {
+            p._periodLabel = '2026 Q1';
+            p._startLabel = '01/01/2026';
+            return;
+          }
+          // Keep Yale unchanged; move active 2025 Q3/Q4 into 2026 Q1.
+          if ((p._periodLabel === '2025 Q4' || p._periodLabel === '2025 Q3') && !nameKey.includes('yale')) {
+            p._periodLabel = '2026 Q1';
+            p._startLabel = '01/01/2026';
+          }
+        });
+
+        return normalized;
+      }
+
+      function selected(groupId) {
+        return Array.from(document.querySelectorAll(`#${groupId} input[type='checkbox']:checked`)).map((x) => norm(x.value));
+      }
+
+      function saveFilters() {
+        const state = {
+          search: (document.getElementById('projectSearch') || {}).value || '',
+          statuses: selected('statusFilter'),
+          leads: selected('leadFilter')
+        };
+        try { localStorage.setItem(FILTER_KEY, JSON.stringify(state)); } catch (_) {}
+      }
+
+      function loadFilters() {
+        try {
+          const raw = localStorage.getItem(FILTER_KEY) || '';
+          if (!raw) return {};
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (_) {
+          return {};
+        }
+      }
+
+      function togglePanel(id) {
+        const panel = document.getElementById(id);
+        if (!panel) return;
+        panel.hidden = !panel.hidden;
+      }
+
+      function closePanel(id) {
+        const panel = document.getElementById(id);
+        if (panel) panel.hidden = true;
+      }
+
+      function clearGroup(id) {
+        document.querySelectorAll(`#${id} input[type='checkbox']`).forEach((x) => { x.checked = false; });
+        renderTables();
+      }
+
+      function updateToggleLabel(toggleId, values, emptyText) {
+        const el = document.getElementById(toggleId);
+        if (!el) return;
+        el.textContent = values.length === 0 ? emptyText : `${values.length} selected`;
+      }
+
+      function buildFilterOptions(groupId, values) {
+        const host = document.getElementById(groupId);
+        host.innerHTML = values.map((v) => `<label class="status-filter-option"><input type="checkbox" value="${esc(v)}" onchange="renderTables()" /><span>${esc(v)}</span></label>`).join('');
+      }
+
+      function buildSummary(hostId, rows) {
+        const counts = {};
+        rows.forEach((row) => {
+          const s = displayStatus(row.task_status || 'Unknown');
+          counts[s] = (counts[s] || 0) + 1;
+        });
+        const host = document.getElementById(hostId);
+        host.innerHTML = Object.keys(counts).sort().map((name) => `<span class="summary-pill">${esc(name)}: ${counts[name]}</span>`).join('');
+      }
+
+      function renderGroupedTables(hostId, rows, mostRecentQuarterFirst = false) {
+        const grouped = {};
+        rows.forEach((row) => {
+          const q = row._periodLabel || 'No Date';
+          if (!grouped[q]) grouped[q] = [];
+          grouped[q].push(row);
+        });
+
+        const keys = Object.keys(grouped).sort((a, b) => {
+          const av = quarterSortValue(a);
+          const bv = quarterSortValue(b);
+          if (av === Number.MIN_SAFE_INTEGER && bv === Number.MIN_SAFE_INTEGER) return String(a).localeCompare(String(b));
+          if (av === Number.MIN_SAFE_INTEGER) return 1;
+          if (bv === Number.MIN_SAFE_INTEGER) return -1;
+          return mostRecentQuarterFirst ? (bv - av) : (av - bv);
+        });
+        const host = document.getElementById(hostId);
+        host.innerHTML = keys.map((quarter) => {
+          const items = grouped[quarter].slice().sort((a, b) => String(a.task_name || '').localeCompare(String(b.task_name || ''), undefined, { sensitivity: 'base' }));
+          const body = items.map((p) => {
+            const adminLink = `/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}&mode=admin${key ? `&key=${encodeURIComponent(key)}` : ''}`;
+            const clientLink = `${CLIENT_BASE}/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}`;
+            return `<tr>
+              <td><a href="${adminLink}">${esc(p.task_name)}</a><br/><a class="mini-link" href="${clientLink}" target="_blank" rel="noreferrer">Client Link</a></td>
+              <td>${esc(p.sf_id)}</td>
+              <td>${esc(p.project_lead || 'Not assigned')}</td>
+              <td>${esc(p.project_support || '-')}</td>
+              <td>${esc(displayStatus(p.task_status || ''))}</td>
+              <td>${esc(p._startLabel || '-')}</td>
+              <td>${esc(p._completedLabel || '-')}</td>
+            </tr>`;
+          }).join('');
+
+          return `<h3 class="admin-period">${esc(quarter)} (${items.length})</h3>
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Client</th>
+                  <th>SF ID</th>
+                  <th>Project Lead</th>
+                  <th>Project Support</th>
+                  <th>Status</th>
+                  <th>Start Date</th>
+                  <th>Completed Date</th>
+                </tr>
+              </thead>
+              <tbody>${body}</tbody>
+            </table>`;
+        }).join('') || '<p class="admin-empty">No projects.</p>';
+      }
+
+      function renderTables() {
+        const query = norm((document.getElementById('projectSearch') || {}).value || '');
+        const statuses = selected('statusFilter');
+        const leads = selected('leadFilter');
+
+        const filtered = projects.filter((p) => {
+          const text = norm(`${p.task_name} ${p.sf_id}`);
+          if (query && !text.includes(query)) return false;
+          if (statuses.length && !statuses.includes(norm(p.task_status))) return false;
+          if (leads.length && !leads.includes(norm(p.project_lead))) return false;
+          return true;
+        });
+
+        const active = [];
+        const completed = [];
+
+        filtered.forEach((p) => {
+          if (p._isCompleted) completed.push(p);
+          else active.push(p);
+        });
+
+        document.getElementById('activeHeader').textContent = `Active Projects (${active.length})`;
+        document.getElementById('completedHeader').textContent = `Completed Projects (${completed.length})`;
+
+        buildSummary('activeSummary', active);
+        buildSummary('completedSummary', completed);
+        renderGroupedTables('activeGroups', active, false);
+        renderGroupedTables('completedGroups', completed, true);
+
+        updateToggleLabel('statusFilterToggle', statuses, 'All statuses');
+        updateToggleLabel('leadFilterToggle', leads, 'All project leads');
+        saveFilters();
+      }
+
+      async function init() {
+        if (isClientHost) {
+          document.body.innerHTML = `<main class="page"><section class="panel"><h2>Not available on client domain</h2><p>Use staging for admin pages.</p></section></main>`;
+          return;
+        }
+        const keyQ = key ? `?key=${encodeURIComponent(key)}` : '';
+        document.getElementById('projectsLink').href = `/admin/projects${keyQ}`;
+        document.getElementById('metricsLink').href = `/admin/metrics${keyQ}`;
+        document.getElementById('refreshLink').href = `/admin/projects${keyQ}`;
+
+        const apiUrl = key ? `/api/projects?key=${encodeURIComponent(key)}` : '/api/projects';
+        const res = await fetch(apiUrl);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || data.error || `Load failed (${res.status})`);
+
+        projects = normalizeProjects(data.projects || []);
+        document.getElementById('countLabel').textContent = `${projects.length} clients`;
+
+        const allStatuses = [...new Set(projects.map((p) => p.task_status).filter(Boolean))].sort();
+        const allLeads = [...new Set(projects.map((p) => p.project_lead).filter(Boolean))].sort();
+        buildFilterOptions('statusFilter', allStatuses);
+        buildFilterOptions('leadFilter', allLeads);
+
+        const saved = loadFilters();
+        if (typeof saved.search === 'string') {
+          document.getElementById('projectSearch').value = saved.search;
+        }
+        const statusSet = new Set(saved.statuses || []);
+        const leadSet = new Set(saved.leads || []);
+
+        document.querySelectorAll('#statusFilter input[type="checkbox"]').forEach((x) => { x.checked = statusSet.has(norm(x.value)); });
+        document.querySelectorAll('#leadFilter input[type="checkbox"]').forEach((x) => { x.checked = leadSet.has(norm(x.value)); });
+
+        renderTables();
+      }
+
+      document.addEventListener('click', (evt) => {
+        ['statusFilterControl', 'leadFilterControl'].forEach((id) => {
+          const box = document.getElementById(id);
+          if (!box || box.contains(evt.target)) return;
+          const panel = box.querySelector('.status-filter-panel');
+          if (panel) panel.hidden = true;
+        });
+      });
+
+      init().catch((err) => {
+        document.body.innerHTML = `<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(err.message || err)}</p></section></main>`;
+      });
+    </script>
+  </body>
+</html>
