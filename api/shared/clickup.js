@@ -72,6 +72,22 @@ function normalizeTask(task) {
     metrics[metricKey] = customFieldDisplayValue(getCustomField(task, fieldId));
   }
 
+  // Fallback: auto-detect month/year style planning fields when not mapped explicitly.
+  // This keeps assessor work-month filtering working even if CLICKUP_FIELD_MAP_JSON
+  // does not include these fields yet.
+  const customFields = Array.isArray(task.custom_fields) ? task.custom_fields : [];
+  const monthField = customFields.find((f) => {
+    const n = normalizeText(f?.name || '');
+    return n.includes('month year') || n.includes('primary work month') || n === 'work month';
+  });
+  if (monthField) {
+    const monthValue = customFieldDisplayValue(monthField);
+    if (monthValue) {
+      if (!String(metrics['project.month_year'] || '').trim()) metrics['project.month_year'] = monthValue;
+      if (!String(metrics['project.primary_work_month'] || '').trim()) metrics['project.primary_work_month'] = monthValue;
+    }
+  }
+
   return {
     sf_id: sfId,
     task_id: String(task.id || ''),
