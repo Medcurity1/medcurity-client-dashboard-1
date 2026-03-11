@@ -64,6 +64,30 @@
         return String(v || '').trim().toLowerCase();
       }
 
+      const MONTH_ORDER = {
+        january: 1,
+        february: 2,
+        march: 3,
+        april: 4,
+        may: 5,
+        june: 6,
+        july: 7,
+        august: 8,
+        september: 9,
+        october: 10,
+        november: 11,
+        december: 12,
+      };
+
+      function sortWorkMonths(a, b) {
+        if (a === 'Not Set') return 1;
+        if (b === 'Not Set') return -1;
+        const av = MONTH_ORDER[norm(a)] || 99;
+        const bv = MONTH_ORDER[norm(b)] || 99;
+        if (av !== bv) return av - bv;
+        return String(a).localeCompare(String(b));
+      }
+
       function displayStatus(v) {
         return String(v || '')
           .replace(/[_-]+/g, ' ')
@@ -118,11 +142,7 @@
           (Array.isArray(baseRows) ? baseRows : [])
             .map((p) => p._workMonthLabel || p.primary_work_month || 'Not Set')
             .filter(Boolean)
-        )].sort((a, b) => {
-          if (a === 'Not Set') return 1;
-          if (b === 'Not Set') return -1;
-          return a.localeCompare(b);
-        });
+        )].sort(sortWorkMonths);
         const selectedForOptions = new Set(
           options
             .map((v) => norm(v))
@@ -241,9 +261,7 @@
         }));
         const statusOptions = [...new Set(projects.map((p) => p._statusLabel).filter(Boolean))].sort();
         const workMonthOptions = [...new Set(projects.map((p) => p._workMonthLabel).filter(Boolean))].sort((a, b) => {
-          if (a === 'Not Set') return 1;
-          if (b === 'Not Set') return -1;
-          return a.localeCompare(b);
+          return sortWorkMonths(a, b);
         });
         buildStatusFilter(statusOptions);
         buildWorkMonthFilter(workMonthOptions);
