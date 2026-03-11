@@ -24,6 +24,22 @@ function getMetric(metrics, ...keys) {
   return '';
 }
 
+function normalizeWorkMonth(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const mUs = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (mUs) {
+    const dt = new Date(Number(mUs[3]), Number(mUs[1]) - 1, Number(mUs[2]));
+    return dt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+  }
+  const mIso = raw.match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
+  if (mIso) {
+    const dt = new Date(Number(mIso[1]), Number(mIso[2]) - 1, 1);
+    return dt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+  }
+  return raw;
+}
+
 function getClientBaseUrl() {
   const raw = String(process.env.CLIENT_PUBLIC_BASE_URL || '').trim();
   if (!raw) return '';
@@ -877,6 +893,14 @@ app.http('assessorProjects', {
           task_status: r.task_status,
           source_updated_at: r.source_updated_at,
           project_lead: getMetric(r.metrics || {}, 'project.project_lead') || 'Not assigned',
+          primary_work_month: normalizeWorkMonth(
+            getMetric(
+              r.metrics || {},
+              'project.primary_work_month',
+              'project.month_year',
+              'project.work_month'
+            )
+          ),
           link_sig: sign(r.sf_id),
         }))
         .filter((p) => leadMatches(p.project_lead, access.lead_values))

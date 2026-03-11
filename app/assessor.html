@@ -27,6 +27,17 @@
               </div>
             </div>
           </div>
+          <div class="status-multiselect" id="workMonthFilterControl">
+            <button type="button" id="workMonthFilterToggle" class="project-filter status-toggle" onclick="togglePanel('workMonthFilterPanel')">Work month</button>
+            <div id="workMonthFilterPanel" class="status-filter-panel" hidden>
+              <div id="workMonthFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearWorkMonthFilter()">Clear</button>
+                <button type="button" class="status-action-btn" onclick="selectAllWorkMonths()">All</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('workMonthFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -71,12 +82,27 @@
         btn.textContent = values.length ? `${values.length} selected` : 'Statuses';
       }
 
+      function selectedWorkMonths() {
+        return Array.from(document.querySelectorAll('#workMonthFilter input[type="checkbox"]:checked')).map((x) => norm(x.value));
+      }
+
+      function updateWorkMonthToggleLabel(values) {
+        const btn = document.getElementById('workMonthFilterToggle');
+        if (!btn) return;
+        btn.textContent = values.length ? `${values.length} selected` : 'Work month';
+      }
+
       function buildStatusFilter(values) {
         const host = document.getElementById('statusFilter');
         host.innerHTML = values.map((v) => `<label class="status-filter-option"><input type="checkbox" value="${esc(v)}" onchange="renderTable()" /><span>${esc(v)}</span></label>`).join('');
         document.querySelectorAll('#statusFilter input[type="checkbox"]').forEach((x) => {
           x.checked = !DEFAULT_EXCLUDED_STATUSES.has(norm(x.value));
         });
+      }
+
+      function buildWorkMonthFilter(values) {
+        const host = document.getElementById('workMonthFilter');
+        host.innerHTML = values.map((v) => `<label class="status-filter-option"><input type="checkbox" value="${esc(v)}" onchange="renderTable()" checked /><span>${esc(v)}</span></label>`).join('');
       }
 
       function togglePanel(id) {
@@ -100,16 +126,29 @@
         renderTable();
       }
 
+      function clearWorkMonthFilter() {
+        document.querySelectorAll('#workMonthFilter input[type="checkbox"]').forEach((x) => { x.checked = false; });
+        renderTable();
+      }
+
+      function selectAllWorkMonths() {
+        document.querySelectorAll('#workMonthFilter input[type="checkbox"]').forEach((x) => { x.checked = true; });
+        renderTable();
+      }
+
       function renderTable() {
         const q = String((document.getElementById('projectSearch') || {}).value || '').trim().toLowerCase();
         const statuses = selectedStatuses();
+        const workMonths = selectedWorkMonths();
         const filtered = projects.filter((p) => {
           if (!String(`${p.task_name} ${p.sf_id}`).toLowerCase().includes(q)) return false;
           if (statuses.length && !statuses.includes(norm(p._statusLabel || p.task_status))) return false;
+          if (workMonths.length && !workMonths.includes(norm(p._workMonthLabel || p.primary_work_month || 'Not Set'))) return false;
           return true;
         });
         document.getElementById('countLabel').textContent = `${filtered.length} projects`;
         updateStatusToggleLabel(statuses);
+        updateWorkMonthToggleLabel(workMonths);
 
         if (!filtered.length) {
           document.getElementById('tableHost').innerHTML = '<p class="admin-empty">No projects found.</p>';
@@ -123,6 +162,7 @@
             <td>${esc(p.sf_id)}</td>
             <td>${esc(p.project_lead || 'Not assigned')}</td>
             <td>${esc(p._statusLabel || p.task_status || '')}</td>
+            <td>${esc(p._workMonthLabel || p.primary_work_month || 'Not Set')}</td>
             <td>${esc(p.source_updated_at || '')}</td>
           </tr>`;
         }).join('');
@@ -135,6 +175,7 @@
                 <th>SF ID</th>
                 <th>Project Lead</th>
                 <th>Status</th>
+                <th>Primary Work Month</th>
                 <th>Last Updated</th>
               </tr>
             </thead>
@@ -162,9 +203,16 @@
         projects = (Array.isArray(data.projects) ? data.projects : []).map((p) => ({
           ...p,
           _statusLabel: displayStatus(p.task_status || 'Unknown'),
+          _workMonthLabel: String(p.primary_work_month || 'Not Set').trim() || 'Not Set',
         }));
         const statusOptions = [...new Set(projects.map((p) => p._statusLabel).filter(Boolean))].sort();
+        const workMonthOptions = [...new Set(projects.map((p) => p._workMonthLabel).filter(Boolean))].sort((a, b) => {
+          if (a === 'Not Set') return 1;
+          if (b === 'Not Set') return -1;
+          return a.localeCompare(b);
+        });
         buildStatusFilter(statusOptions);
+        buildWorkMonthFilter(workMonthOptions);
         renderTable();
       }
 
@@ -173,10 +221,12 @@
       });
 
       document.addEventListener('click', (evt) => {
-        const box = document.getElementById('statusFilterControl');
-        if (!box || box.contains(evt.target)) return;
-        const panel = document.getElementById('statusFilterPanel');
-        if (panel) panel.hidden = true;
+        ['statusFilterControl', 'workMonthFilterControl'].forEach((id) => {
+          const box = document.getElementById(id);
+          if (!box || box.contains(evt.target)) return;
+          const panel = box.querySelector('.status-filter-panel');
+          if (panel) panel.hidden = true;
+        });
       });
     </script>
   </body>
