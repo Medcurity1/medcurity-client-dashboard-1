@@ -123,6 +123,24 @@ function pickBestBySf(rows) {
   return Array.from(bySf.values());
 }
 
+function preserveNextStepsFromCached(rows, cachedRows) {
+  const current = Array.isArray(rows) ? rows : [];
+  const prior = Array.isArray(cachedRows) ? cachedRows : [];
+  if (!current.length || !prior.length) return;
+  const bySf = new Map(prior.map((r) => [String(r?.sf_id || ''), r]));
+  for (const row of current) {
+    const sf = String(row?.sf_id || '');
+    if (!sf) continue;
+    const nextSteps = String(row?.metrics?.['project.next_steps'] || '').trim();
+    if (nextSteps) continue;
+    const cached = bySf.get(sf);
+    const cachedNextSteps = String(cached?.metrics?.['project.next_steps'] || '').trim();
+    if (!cachedNextSteps) continue;
+    row.metrics = row.metrics || {};
+    row.metrics['project.next_steps'] = cachedNextSteps;
+  }
+}
+
 async function fetchListRows(options = {}) {
   const force = !!options.force;
   const includeComments = !!options.includeComments;
@@ -160,6 +178,15 @@ async function fetchListRows(options = {}) {
   const run = (async () => {
   const listId = required('CLICKUP_LIST_ID');
   const all = [];
+  let cachedRowsForMerge = null;
+  if (!includeComments && hasSqlConfig()) {
+    try {
+      const cached = await getCachedClickupRows();
+      cachedRowsForMerge = cached && Array.isArray(cached.rows) ? cached.rows : null;
+    } catch (_) {
+      cachedRowsForMerge = null;
+    }
+  }
   let page = 0;
   while (true) {
     const data = await fetchJson(`/list/${listId}/task?include_closed=true&page=${page}`);
@@ -174,6 +201,8 @@ async function fetchListRows(options = {}) {
     const rows = pickBestBySf(all);
     if (includeComments) {
       await hydrateNextStepsFromComments(rows);
+    } else if (cachedRowsForMerge) {
+      preserveNextStepsFromCached(rows, cachedRowsForMerge);
     }
     listCacheRows = rows;
     listCacheUntil = Date.now() + LIST_CACHE_TTL_MS;
