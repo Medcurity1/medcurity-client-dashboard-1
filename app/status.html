@@ -54,7 +54,7 @@
       const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
       // Read-only by default for client links. Editing is enabled only in explicit admin mode.
       const hasAdminKey = String(key || '').trim().length > 0;
-      const canEdit = (isStagingHost || isLocalHost) && mode === 'admin' && hasAdminKey;
+      const canEdit = mode === 'admin' && hasAdminKey;
       const allowLocalOverrideFallback = isLocalHost;
       let overridesBackend = 'none';
       let currentDashboard = null;
