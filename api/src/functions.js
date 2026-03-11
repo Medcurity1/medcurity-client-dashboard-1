@@ -36,6 +36,58 @@ function requestActor(req) {
   return 'dashboard_admin';
 }
 
+function normalizeLead(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function parseAssessorAccessConfig() {
+  const raw = String(process.env.ASSESSOR_ACCESS_JSON || '').trim();
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function resolveAssessorAccess(token) {
+  const config = parseAssessorAccessConfig();
+  const entry = config[String(token || '').trim()];
+  if (!entry) return null;
+  if (typeof entry === 'string') {
+    const lead = entry.trim();
+    return lead ? { assessor_name: lead, lead_values: [lead] } : null;
+  }
+  if (entry && typeof entry === 'object') {
+    const assessorName = String(entry.assessor_name || entry.assessor || '').trim();
+    const leadValues = Array.isArray(entry.lead_values)
+      ? entry.lead_values.map((v) => String(v || '').trim()).filter(Boolean)
+      : [];
+    if (!leadValues.length) return null;
+    return {
+      assessor_name: assessorName || leadValues[0],
+      lead_values: leadValues,
+    };
+  }
+  return null;
+}
+
+function leadMatches(projectLead, allowedLeads) {
+  const project = normalizeLead(projectLead);
+  if (!project) return false;
+  return allowedLeads.some((lead) => {
+    const target = normalizeLead(lead);
+    if (!target) return false;
+    return project === target || project.includes(target);
+  });
+}
+
 function metricKeyAliases(metricKey) {
   const k = String(metricKey || '').trim();
   if (!k) return [];
@@ -795,6 +847,42 @@ app.http('projects', {
         link_sig: sign(r.sf_id),
       }));
       return json(200, { count: projects.length, projects });
+    } catch (err) {
+      ctx.error(err);
+      return json(500, { error: 'server_error', detail: String(err.message || err) });
+    }
+  },
+});
+
+app.http('assessorProjects', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'assessorProjects',
+  handler: async (req, ctx) => {
+    try {
+      const token = String(req.query.get('token') || '').trim();
+      const access = resolveAssessorAccess(token);
+      if (!access) return json(401, { error: 'unauthorized' });
+
+      const rows = await fetchListRows();
+      const projects = rows
+        .map((r) => ({
+          sf_id: r.sf_id,
+          task_name: r.task_name,
+          task_status: r.task_status,
+          source_updated_at: r.source_updated_at,
+          project_lead: getMetric(r.metrics || {}, 'project.project_lead') || 'Not assigned',
+          link_sig: sign(r.sf_id),
+        }))
+        .filter((p) => leadMatches(p.project_lead, access.lead_values))
+        .sort((a, b) => String(a.task_name || '').localeCompare(String(b.task_name || '')));
+
+      return json(200, {
+        assessor_name: access.assessor_name,
+        lead_values: access.lead_values,
+        count: projects.length,
+        projects,
+      });
     } catch (err) {
       ctx.error(err);
       return json(500, { error: 'server_error', detail: String(err.message || err) });

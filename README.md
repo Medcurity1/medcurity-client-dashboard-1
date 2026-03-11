@@ -7,8 +7,10 @@ This version is rewritten for Azure Static Web Apps:
 ## Routes
 - `/admin/projects?key=...`
 - `/admin/metrics?key=...`
+- `/assessor?token=...` (read-only lead-filtered internal view)
 - `/status?sf_id=...&sig=...`
 - `/api/generateLink?sf_id=...&key=...` (returns signed client URL)
+- `/api/assessorProjects?token=...`
 - `/api/storageHealth?key=...` (confirms Azure SQL connectivity and table counts)
 
 ## Required Environment Variables (Static Web App > Configuration)
@@ -19,6 +21,7 @@ This version is rewritten for Azure Static Web Apps:
 - `ADMIN_API_KEY`
 - `CLICKUP_FIELD_MAP_JSON`
 - `AZURE_SQL_CONNECTION_STRING`
+- `ASSESSOR_ACCESS_JSON` (token->lead mapping for internal read-only assessor dashboard)
 
 ## Recommended Environment Variables
 - `CLIENT_PUBLIC_BASE_URL=https://status.medcurity.com`
@@ -50,3 +53,7 @@ If `AZURE_SQL_CONNECTION_STRING` is unset:
 - Output location: *(leave blank)*
 
 Redeploy trigger: 2026-02-24T23:00:33Z
+
+
+Example assessor mapping:
+`ASSESSOR_ACCESS_JSON={"token_for_jordan":{"assessor_name":"Jordan","lead_values":["Jordan"]},"token_for_amanda":{"assessor_name":"Amanda","lead_values":["Amanda"]}}`

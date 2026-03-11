@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Assessor Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="top">
+        <h1 id="title">Assessor Dashboard</h1>
+        <p id="countLabel">0 projects</p>
+      </header>
+
+      <section class="panel">
+        <div class="admin-controls">
+          <input id="projectSearch" class="project-search" type="search" placeholder="Search by client name or SF ID..." oninput="renderTable()" />
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Your Assigned Projects</h2>
+        <div id="tableHost"></div>
+      </section>
+    </main>
+
+    <script>
+      const qp = new URLSearchParams(location.search);
+      const token = qp.get('token') || '';
+      let projects = [];
+
+      function esc(v) {
+        return String(v || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+      }
+
+      function renderTable() {
+        const q = String((document.getElementById('projectSearch') || {}).value || '').trim().toLowerCase();
+        const filtered = projects.filter((p) => String(`${p.task_name} ${p.sf_id}`).toLowerCase().includes(q));
+        document.getElementById('countLabel').textContent = `${filtered.length} projects`;
+
+        if (!filtered.length) {
+          document.getElementById('tableHost').innerHTML = '<p class="admin-empty">No projects found.</p>';
+          return;
+        }
+
+        const rows = filtered.map((p) => {
+          const href = `/status?sf_id=${encodeURIComponent(p.sf_id)}&sig=${encodeURIComponent(p.link_sig)}`;
+          return `<tr>
+            <td><a href="${href}">${esc(p.task_name)}</a></td>
+            <td>${esc(p.sf_id)}</td>
+            <td>${esc(p.project_lead || 'Not assigned')}</td>
+            <td>${esc(p.task_status || '')}</td>
+            <td>${esc(p.source_updated_at || '')}</td>
+          </tr>`;
+        }).join('');
+
+        document.getElementById('tableHost').innerHTML = `
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Client</th>
+                <th>SF ID</th>
+                <th>Project Lead</th>
+                <th>Status</th>
+                <th>Last Updated</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        `;
+      }
+
+      async function init() {
+        if (!token) {
+          document.body.innerHTML = '<main class="page"><section class="panel"><h2>Access denied</h2><p>Missing assessor token.</p></section></main>';
+          return;
+        }
+        const res = await fetch(`/api/assessorProjects?token=${encodeURIComponent(token)}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          document.body.innerHTML = `<main class="page"><section class="panel"><h2>Access denied</h2><p>${esc(data.error || 'unauthorized')}</p></section></main>`;
+          return;
+        }
+        const name = String(data.assessor_name || 'Assessor').trim();
+        document.getElementById('title').textContent = `${name} - Project Dashboard`;
+        projects = Array.isArray(data.projects) ? data.projects : [];
+        renderTable();
+      }
+
+      init().catch((err) => {
+        document.body.innerHTML = `<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(err.message || err)}</p></section></main>`;
+      });
+    </script>
+  </body>
+</html>
+
