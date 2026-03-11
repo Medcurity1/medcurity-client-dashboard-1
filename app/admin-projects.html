@@ -11,6 +11,7 @@
       <h3>Admin Menu</h3>
       <a class="admin-nav-link" id="projectsLink" href="#">Projects</a>
       <a class="admin-nav-link" id="metricsLink" href="#">Metrics</a>
+      <a class="admin-nav-link" id="assessorsLink" href="#">Assessors</a>
     </aside>
 
     <main class="page">
@@ -342,6 +343,7 @@
         const keyQ = key ? `?key=${encodeURIComponent(key)}` : '';
         document.getElementById('projectsLink').href = `/admin/projects${keyQ}`;
         document.getElementById('metricsLink').href = `/admin/metrics${keyQ}`;
+        document.getElementById('assessorsLink').href = `/admin/assessors${keyQ}`;
         document.getElementById('refreshLink').href = `/admin/projects${key ? `?key=${encodeURIComponent(key)}&refresh=1` : '?refresh=1'}`;
 
         const refresh = ['1', 'true', 'yes'].includes(String(qp.get('refresh') || '').trim().toLowerCase());

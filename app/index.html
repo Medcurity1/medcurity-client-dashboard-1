@@ -32,7 +32,7 @@
         links.innerHTML = '';
       } else {
         txt.textContent = 'Open admin pages from staging.';
-        links.innerHTML = `<a href="/admin/projects${key ? `?key=${encodeURIComponent(key)}` : ''}">Admin Projects</a> | <a href="/admin/metrics${key ? `?key=${encodeURIComponent(key)}` : ''}">Admin Metrics</a>`;
+        links.innerHTML = `<a href="/admin/projects${key ? `?key=${encodeURIComponent(key)}` : ''}">Admin Projects</a> | <a href="/admin/metrics${key ? `?key=${encodeURIComponent(key)}` : ''}">Admin Metrics</a> | <a href="/admin/assessors${key ? `?key=${encodeURIComponent(key)}` : ''}">Admin Assessors</a>`;
       }
     </script>
   </body>

@@ -158,6 +158,16 @@ function leadMatches(projectLead, allowedLeads) {
   });
 }
 
+function splitLeadValues(rawLead) {
+  const raw = String(rawLead || '').trim();
+  if (!raw) return [];
+  return raw
+    .replace(/\s+and\s+/gi, '/')
+    .split(/[\/,&]/g)
+    .map((v) => String(v || '').trim())
+    .filter(Boolean);
+}
+
 function metricKeyAliases(metricKey) {
   const k = String(metricKey || '').trim();
   if (!k) return [];
@@ -984,6 +994,56 @@ app.http('generateAssessorLink', {
         };
       }
       return json(200, { lead, sig, relative_url: relative, url });
+    } catch (err) {
+      ctx.error(err);
+      return json(500, { error: 'server_error', detail: String(err.message || err) });
+    }
+  },
+});
+
+app.http('assessors', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'assessors',
+  handler: async (req, ctx) => {
+    try {
+      if (!isAdmin({ query: Object.fromEntries(req.query.entries()), headers: req.headers })) {
+        return json(401, { error: 'unauthorized' });
+      }
+      const rows = await fetchListRows();
+      const leadMap = new Map();
+
+      rows
+        .filter((r) => String(r.task_status || '').trim().toLowerCase() !== 'completed')
+        .forEach((r) => {
+          const leadRaw = getMetric(r.metrics || {}, 'project.project_lead');
+          const names = splitLeadValues(leadRaw);
+          names.forEach((name) => {
+            const key = normalizeLead(name);
+            if (!key) return;
+            const current = leadMap.get(key) || { name, active_project_count: 0 };
+            current.active_project_count += 1;
+            // Prefer the longest display variant seen, usually full proper case.
+            if (String(name).length > String(current.name || '').length) current.name = name;
+            leadMap.set(key, current);
+          });
+        });
+
+      const base = getClientBaseUrl();
+      const assessors = Array.from(leadMap.values())
+        .map((a) => {
+          const sig = signAssessorLead(a.name);
+          const relative = `/assessor?lead=${encodeURIComponent(a.name)}&sig=${encodeURIComponent(sig)}`;
+          return {
+            name: a.name,
+            active_project_count: a.active_project_count,
+            relative_url: relative,
+            url: base ? `${base}${relative}` : relative,
+          };
+        })
+        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }));
+
+      return json(200, { count: assessors.length, assessors });
     } catch (err) {
       ctx.error(err);
       return json(500, { error: 'server_error', detail: String(err.message || err) });

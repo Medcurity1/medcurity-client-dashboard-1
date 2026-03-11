@@ -3,6 +3,7 @@
     { "route": "/", "rewrite": "/index.html" },
     { "route": "/admin/projects", "rewrite": "/admin-projects.html" },
     { "route": "/admin/metrics", "rewrite": "/admin-metrics.html" },
+    { "route": "/admin/assessors", "rewrite": "/admin-assessors.html" },
     { "route": "/status", "rewrite": "/status.html" },
     { "route": "/assessor", "rewrite": "/assessor.html" }
   ],
