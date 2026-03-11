@@ -111,11 +111,28 @@
       const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
       const isClientHost = (host === CLIENT_HOST || host.endsWith(`.${CLIENT_HOST}`)) && !isStagingHost;
       let key = qp.get('key') || '';
+      const ADMIN_KEY_STORE = 'medcurity_admin_api_key_v1';
       const FILTER_KEY = 'medcurity_metrics_filters_v2';
       let rows = [];
 
       function esc(v) { return String(v || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])); }
       function norm(v) { return String(v || '').trim().toLowerCase(); }
+      function loadStoredAdminKey() {
+        try { return String(localStorage.getItem(ADMIN_KEY_STORE) || '').trim(); } catch (_) { return ''; }
+      }
+      function saveStoredAdminKey(value) {
+        try { localStorage.setItem(ADMIN_KEY_STORE, String(value || '').trim()); } catch (_) {}
+      }
+      function clearStoredAdminKey() {
+        try { localStorage.removeItem(ADMIN_KEY_STORE); } catch (_) {}
+      }
+      function syncKeyInUrl() {
+        if (!key) return;
+        const url = new URL(location.href);
+        if (url.searchParams.get('key') === key) return;
+        url.searchParams.set('key', key);
+        history.replaceState(null, '', url.toString());
+      }
 
       function togglePanel(id) {
         const panel = document.getElementById(id);
@@ -216,12 +233,29 @@
       }
 
       async function init() {
+        if (!key) key = loadStoredAdminKey();
+        if (key) {
+          saveStoredAdminKey(key);
+          syncKeyInUrl();
+        }
         const keyQ = key ? `?key=${encodeURIComponent(key)}` : '';
         document.getElementById('projectsLink').href = `/admin/projects${keyQ}`;
         document.getElementById('metricsLink').href = `/admin/metrics${keyQ}`;
 
         const apiUrl = key ? `/api/metrics?key=${encodeURIComponent(key)}` : '/api/metrics';
-        const res = await fetch(apiUrl);
+        let res = await fetch(apiUrl);
+        if (res.status === 401) {
+          const entered = String(window.prompt('Enter admin key to continue:', '') || '').trim();
+          if (!entered) throw new Error('Unauthorized');
+          key = entered;
+          saveStoredAdminKey(key);
+          syncKeyInUrl();
+          res = await fetch(`/api/metrics?key=${encodeURIComponent(key)}`);
+          if (res.status === 401) {
+            clearStoredAdminKey();
+            throw new Error('Unauthorized');
+          }
+        }
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.detail || data.error || `Load failed (${res.status})`);
 
