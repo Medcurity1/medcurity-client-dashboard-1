@@ -924,11 +924,24 @@ app.http('generateAssessorLink', {
       }
       const lead = String(req.query.get('lead') || '').trim();
       if (!lead) return json(400, { error: 'missing_lead' });
+      const explicitRedirect = String(req.query.get('redirect') || '').trim().toLowerCase();
+      const wantsRedirect = ['1', 'true', 'yes'].includes(explicitRedirect);
+      const wantsJson = ['0', 'false', 'no'].includes(explicitRedirect);
+      const acceptHeader = String((req.headers?.get && req.headers.get('accept')) || '').toLowerCase();
+      const browserHtmlRequest = acceptHeader.includes('text/html');
       const sig = signAssessorLead(lead);
       if (!sig) return json(400, { error: 'invalid_lead' });
       const relative = `/assessor?lead=${encodeURIComponent(lead)}&sig=${encodeURIComponent(sig)}`;
       const base = getClientBaseUrl();
       const url = base ? `${base}${relative}` : relative;
+      if (wantsRedirect || (!wantsJson && browserHtmlRequest)) {
+        return {
+          status: 302,
+          headers: {
+            Location: url,
+          },
+        };
+      }
       return json(200, { lead, sig, relative_url: relative, url });
     } catch (err) {
       ctx.error(err);
