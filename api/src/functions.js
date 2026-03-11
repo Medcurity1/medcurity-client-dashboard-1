@@ -331,9 +331,11 @@ function addEcdAcdFields(stepMap, offsets) {
   const fieldMap = parseFieldMap();
   const kickoffName = Object.keys(stepMap).find((n) => String(stepMap[n]?.step_slug || '').includes('kickoff')) || null;
   const kickoffSlug = kickoffName ? String(stepMap[kickoffName]?.step_slug || '') : '';
-  if (kickoffName) {
-    const kickoff = stepMap[kickoffName];
-    kickoff.ECD = kickoff.ACD || '';
+  const sraKickoffName = findStepNameBySlug(stepMap, 'sra_kickoff');
+  if (sraKickoffName) {
+    const kickoff = stepMap[sraKickoffName];
+    // Only SRA kickoff mirrors ECD from ACD.
+    kickoff.ECD = kickoff.ACD || kickoff.ECD || '';
     kickoff.ecd.editable = false;
   }
 
