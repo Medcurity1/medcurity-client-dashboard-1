@@ -78,6 +78,26 @@ function resolveAssessorAccess(token) {
   return null;
 }
 
+function signAssessorLead(lead) {
+  const normalized = normalizeLead(lead);
+  if (!normalized) return '';
+  return sign(`assessor:${normalized}`);
+}
+
+function resolveAssessorAccessFromLead(lead, sig) {
+  const rawLead = String(lead || '').trim();
+  const providedSig = String(sig || '').trim();
+  const normalized = normalizeLead(rawLead);
+  if (!rawLead || !providedSig || !normalized) return null;
+  const expected = signAssessorLead(rawLead);
+  if (!expected || providedSig !== expected) return null;
+  return {
+    assessor_name: rawLead,
+    lead_values: [rawLead],
+    mode: 'signed_lead',
+  };
+}
+
 function leadMatches(projectLead, allowedLeads) {
   const project = normalizeLead(projectLead);
   if (!project) return false;
@@ -861,7 +881,9 @@ app.http('assessorProjects', {
   handler: async (req, ctx) => {
     try {
       const token = String(req.query.get('token') || '').trim();
-      const access = resolveAssessorAccess(token);
+      const lead = String(req.query.get('lead') || '').trim();
+      const sig = String(req.query.get('sig') || '').trim();
+      const access = resolveAssessorAccess(token) || resolveAssessorAccessFromLead(lead, sig);
       if (!access) return json(401, { error: 'unauthorized' });
 
       const rows = await fetchListRows();
@@ -880,9 +902,34 @@ app.http('assessorProjects', {
       return json(200, {
         assessor_name: access.assessor_name,
         lead_values: access.lead_values,
+        access_mode: access.mode || (token ? 'token' : 'signed_lead'),
         count: projects.length,
         projects,
       });
+    } catch (err) {
+      ctx.error(err);
+      return json(500, { error: 'server_error', detail: String(err.message || err) });
+    }
+  },
+});
+
+app.http('generateAssessorLink', {
+  methods: ['GET'],
+  authLevel: 'anonymous',
+  route: 'generateAssessorLink',
+  handler: async (req, ctx) => {
+    try {
+      if (!isAdmin({ query: Object.fromEntries(req.query.entries()), headers: req.headers })) {
+        return json(401, { error: 'unauthorized' });
+      }
+      const lead = String(req.query.get('lead') || '').trim();
+      if (!lead) return json(400, { error: 'missing_lead' });
+      const sig = signAssessorLead(lead);
+      if (!sig) return json(400, { error: 'invalid_lead' });
+      const relative = `/assessor?lead=${encodeURIComponent(lead)}&sig=${encodeURIComponent(sig)}`;
+      const base = getClientBaseUrl();
+      const url = base ? `${base}${relative}` : relative;
+      return json(200, { lead, sig, relative_url: relative, url });
     } catch (err) {
       ctx.error(err);
       return json(500, { error: 'server_error', detail: String(err.message || err) });

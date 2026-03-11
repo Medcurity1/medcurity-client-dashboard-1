@@ -8,9 +8,11 @@ This version is rewritten for Azure Static Web Apps:
 - `/admin/projects?key=...`
 - `/admin/metrics?key=...`
 - `/assessor?token=...` (read-only lead-filtered internal view)
+- `/assessor?lead=...&sig=...` (read-only signed assessor link; no new env var needed)
 - `/status?sf_id=...&sig=...`
 - `/api/generateLink?sf_id=...&key=...` (returns signed client URL)
 - `/api/assessorProjects?token=...`
+- `/api/generateAssessorLink?lead=...&key=...`
 - `/api/storageHealth?key=...` (confirms Azure SQL connectivity and table counts)
 
 ## Required Environment Variables (Static Web App > Configuration)

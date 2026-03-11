@@ -28,6 +28,8 @@
     <script>
       const qp = new URLSearchParams(location.search);
       const token = qp.get('token') || '';
+      const lead = qp.get('lead') || '';
+      const sig = qp.get('sig') || '';
       let projects = [];
 
       function esc(v) {
@@ -72,11 +74,14 @@
       }
 
       async function init() {
-        if (!token) {
-          document.body.innerHTML = '<main class="page"><section class="panel"><h2>Access denied</h2><p>Missing assessor token.</p></section></main>';
+        if (!token && !(lead && sig)) {
+          document.body.innerHTML = '<main class="page"><section class="panel"><h2>Access denied</h2><p>Missing assessor access parameters.</p></section></main>';
           return;
         }
-        const res = await fetch(`/api/assessorProjects?token=${encodeURIComponent(token)}`);
+        const query = token
+          ? `token=${encodeURIComponent(token)}`
+          : `lead=${encodeURIComponent(lead)}&sig=${encodeURIComponent(sig)}`;
+        const res = await fetch(`/api/assessorProjects?${query}`);
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           document.body.innerHTML = `<main class="page"><section class="panel"><h2>Access denied</h2><p>${esc(data.error || 'unauthorized')}</p></section></main>`;
@@ -94,4 +99,3 @@
     </script>
   </body>
 </html>
-
