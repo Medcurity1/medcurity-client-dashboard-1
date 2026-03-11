@@ -54,7 +54,8 @@
       const isStagingHost = host === STAGING_HOST || host.endsWith(`.${STAGING_HOST}`);
       // Read-only by default for client links. Editing is enabled only in explicit admin mode.
       const hasAdminKey = String(key || '').trim().length > 0;
-      const canEdit = mode === 'admin' && hasAdminKey;
+      const hasAdminAccess = mode === 'admin' && (hasAdminKey || isStagingHost || isLocalHost);
+      const canEdit = hasAdminAccess;
       const allowLocalOverrideFallback = isLocalHost;
       let overridesBackend = 'none';
       let currentDashboard = null;
@@ -636,9 +637,11 @@
           return;
         }
 
-        if (mode === 'admin' && hasAdminKey) {
+        if (hasAdminAccess) {
           document.getElementById('adminMenu').style.display = '';
-          document.getElementById('backAdmin').href = `/admin/projects?key=${encodeURIComponent(key)}`;
+          document.getElementById('backAdmin').href = key
+            ? `/admin/projects?key=${encodeURIComponent(key)}`
+            : '/admin/projects';
           if (canEdit) {
             const vt = document.getElementById('viewToggle');
             vt.style.display = '';
