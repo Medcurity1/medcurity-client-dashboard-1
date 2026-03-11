@@ -60,6 +60,16 @@ BEGIN
     last_generated_at DATETIME2 NOT NULL CONSTRAINT DF_client_links_generated_at DEFAULT SYSUTCDATETIME()
   );
 END;
+
+IF OBJECT_ID(N'dbo.clickup_rows', N'U') IS NULL
+BEGIN
+  CREATE TABLE dbo.clickup_rows (
+    sf_id NVARCHAR(100) NOT NULL PRIMARY KEY,
+    row_json NVARCHAR(MAX) NOT NULL,
+    source_updated_at DATETIME2 NULL,
+    synced_at DATETIME2 NOT NULL CONSTRAINT DF_clickup_rows_synced_at DEFAULT SYSUTCDATETIME()
+  );
+END;
 `;
   await pool.request().batch(sqlText);
 }
@@ -184,10 +194,11 @@ async function storageHealth() {
   }
 
   const pool = await getPool();
-  const [overrides, audits, links] = await Promise.all([
+  const [overrides, audits, links, clickupRows] = await Promise.all([
     pool.request().query('SELECT COUNT(1) AS total FROM dbo.ecd_overrides;'),
     pool.request().query('SELECT COUNT(1) AS total FROM dbo.audit_events;'),
     pool.request().query('SELECT COUNT(1) AS total FROM dbo.client_links;'),
+    pool.request().query('SELECT COUNT(1) AS total FROM dbo.clickup_rows;'),
   ]);
 
   return {
@@ -199,8 +210,62 @@ async function storageHealth() {
       ecd_overrides: Number(overrides.recordset?.[0]?.total || 0),
       audit_events: Number(audits.recordset?.[0]?.total || 0),
       client_links: Number(links.recordset?.[0]?.total || 0),
+      clickup_rows: Number(clickupRows.recordset?.[0]?.total || 0),
     },
   };
+}
+
+async function getCachedClickupRows() {
+  const pool = await getPool();
+  if (!pool) return null;
+  const result = await pool
+    .request()
+    .query(`
+      SELECT sf_id, row_json, synced_at
+      FROM dbo.clickup_rows
+    `);
+  const rows = [];
+  let latestSyncMs = 0;
+  for (const rec of result.recordset || []) {
+    try {
+      const row = JSON.parse(String(rec.row_json || '{}'));
+      if (row && typeof row === 'object') rows.push(row);
+    } catch (_) {
+      // Skip invalid cached rows.
+    }
+    const syncedAt = rec.synced_at ? new Date(rec.synced_at).getTime() : 0;
+    if (Number.isFinite(syncedAt) && syncedAt > latestSyncMs) latestSyncMs = syncedAt;
+  }
+  return {
+    rows,
+    latestSyncMs,
+  };
+}
+
+async function replaceCachedClickupRows(rows) {
+  const pool = await getPool();
+  if (!pool) return false;
+  const cleaned = Array.isArray(rows) ? rows.filter((r) => r && r.sf_id) : [];
+  const tx = pool.transaction();
+  await tx.begin();
+  try {
+    await tx.request().query('DELETE FROM dbo.clickup_rows;');
+    for (const row of cleaned) {
+      await tx.request()
+        .input('sf_id', String(row.sf_id))
+        .input('row_json', JSON.stringify(row))
+        .input('source_updated_at', row.source_updated_at ? new Date(row.source_updated_at) : null)
+        .query(`
+          INSERT INTO dbo.clickup_rows (sf_id, row_json, source_updated_at)
+          VALUES (@sf_id, @row_json, @source_updated_at);
+        `);
+    }
+    await tx.commit();
+    return true;
+  } catch (err) {
+    await tx.rollback().catch(() => {});
+    throw err;
+  }
 }
 
 module.exports = {
@@ -210,4 +275,6 @@ module.exports = {
   recordAuditEvent,
   upsertClientLink,
   storageHealth,
+  getCachedClickupRows,
+  replaceCachedClickupRows,
 };

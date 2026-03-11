@@ -1,5 +1,5 @@
 const { app } = require('@azure/functions');
-const { fetchListRows, updateCustomField, fetchLatestTaskComment } = require('../shared/clickup');
+const { fetchListRows, updateCustomField } = require('../shared/clickup');
 const { isAdmin, sign, parseUSDate, dateDiffBusinessDays, quarterLabel, parseFieldMap } = require('../shared/utils');
 const {
   hasSqlConfig,
@@ -817,24 +817,6 @@ app.http('status', {
       const rows = await fetchListRows();
       const row = rows.find((r) => r.sf_id === sfId);
       if (!row) return json(404, { error: 'not_found' });
-      try {
-        const currentNextSteps = String(row.metrics?.['project.next_steps'] || '').trim();
-        if (!currentNextSteps) {
-          const latestComment = await fetchLatestTaskComment(row.task_id);
-          if (latestComment) {
-            row.metrics = row.metrics || {};
-            row.metrics['project.next_steps'] = latestComment;
-          }
-        }
-      } catch (_) {
-        // Ignore comment-fetch failures and fall back to existing mapped field value.
-      }
-      try {
-        // Warm list cache periodically in background on status traffic.
-        fetchListRows().catch(() => {});
-      } catch (_) {
-        // no-op
-      }
       return json(200, { ...row, dashboard: buildDashboard(row) });
     } catch (err) {
       ctx.error(err);
@@ -852,7 +834,8 @@ app.http('projects', {
       if (!isAdmin({ query: Object.fromEntries(req.query.entries()), headers: req.headers })) {
         return json(401, { error: 'unauthorized' });
       }
-      const rows = await fetchListRows();
+      const refresh = ['1', 'true', 'yes'].includes(String(req.query.get('refresh') || '').trim().toLowerCase());
+      const rows = await fetchListRows({ force: refresh });
       const projects = rows.map((r) => ({
         sf_id: r.sf_id,
         task_name: r.task_name,

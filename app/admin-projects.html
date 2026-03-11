@@ -342,9 +342,12 @@
         const keyQ = key ? `?key=${encodeURIComponent(key)}` : '';
         document.getElementById('projectsLink').href = `/admin/projects${keyQ}`;
         document.getElementById('metricsLink').href = `/admin/metrics${keyQ}`;
-        document.getElementById('refreshLink').href = `/admin/projects${keyQ}`;
+        document.getElementById('refreshLink').href = `/admin/projects${key ? `?key=${encodeURIComponent(key)}&refresh=1` : '?refresh=1'}`;
 
-        const apiUrl = key ? `/api/projects?key=${encodeURIComponent(key)}` : '/api/projects';
+        const refresh = ['1', 'true', 'yes'].includes(String(qp.get('refresh') || '').trim().toLowerCase());
+        const apiUrl = key
+          ? `/api/projects?key=${encodeURIComponent(key)}${refresh ? '&refresh=1' : ''}`
+          : `/api/projects${refresh ? '?refresh=1' : ''}`;
         let res = await fetch(apiUrl);
         if (res.status === 401) {
           const entered = String(window.prompt('Enter admin key to continue:', '') || '').trim();

@@ -4,9 +4,15 @@ const {
   toDateUS,
   normalizeText,
 } = require('./utils');
+const {
+  hasSqlConfig,
+  getCachedClickupRows,
+  replaceCachedClickupRows,
+} = require('./dashboardStore');
 
 const API_BASE = 'https://api.clickup.com/api/v2';
 const LIST_CACHE_TTL_MS = 60 * 1000;
+const SQL_CACHE_REFRESH_MS = 10 * 60 * 1000;
 const COMMENT_CACHE_TTL_MS = 2 * 60 * 1000;
 
 let listCacheRows = null;
@@ -107,6 +113,33 @@ async function fetchListRows(options = {}) {
   if (!force && listCacheRows && now < listCacheUntil) return listCacheRows;
   if (!force && listCacheInFlight) return listCacheInFlight;
 
+  if (!force && hasSqlConfig()) {
+    try {
+      const cached = await getCachedClickupRows();
+      if (cached && Array.isArray(cached.rows) && cached.rows.length) {
+        listCacheRows = cached.rows;
+        listCacheUntil = Date.now() + LIST_CACHE_TTL_MS;
+        const stale = !cached.latestSyncMs || (Date.now() - cached.latestSyncMs) > SQL_CACHE_REFRESH_MS;
+        if (stale && !listCacheInFlight) {
+          const refresh = (async () => {
+            try {
+              await fetchListRows({ force: true });
+            } catch (_) {
+              // Keep serving cached SQL snapshot if refresh fails.
+            }
+          })();
+          listCacheInFlight = refresh;
+          refresh.finally(() => {
+            if (listCacheInFlight === refresh) listCacheInFlight = null;
+          });
+        }
+        return listCacheRows;
+      }
+    } catch (_) {
+      // Fall through to live ClickUp fetch.
+    }
+  }
+
   const run = (async () => {
   const listId = required('CLICKUP_LIST_ID');
   const all = [];
@@ -124,6 +157,9 @@ async function fetchListRows(options = {}) {
     const rows = pickBestBySf(all);
     listCacheRows = rows;
     listCacheUntil = Date.now() + LIST_CACHE_TTL_MS;
+    if (hasSqlConfig()) {
+      replaceCachedClickupRows(rows).catch(() => {});
+    }
     return rows;
   })();
 
