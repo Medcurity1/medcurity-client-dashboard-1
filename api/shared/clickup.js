@@ -109,6 +109,7 @@ function pickBestBySf(rows) {
 
 async function fetchListRows(options = {}) {
   const force = !!options.force;
+  const includeComments = !!options.includeComments;
   const now = Date.now();
   if (!force && listCacheRows && now < listCacheUntil) return listCacheRows;
   if (!force && listCacheInFlight) return listCacheInFlight;
@@ -155,6 +156,9 @@ async function fetchListRows(options = {}) {
     page += 1;
   }
     const rows = pickBestBySf(all);
+    if (includeComments) {
+      await hydrateNextStepsFromComments(rows);
+    }
     listCacheRows = rows;
     listCacheUntil = Date.now() + LIST_CACHE_TTL_MS;
     if (hasSqlConfig()) {
@@ -169,6 +173,34 @@ async function fetchListRows(options = {}) {
   } finally {
     listCacheInFlight = null;
   }
+}
+
+async function hydrateNextStepsFromComments(rows) {
+  const targets = (Array.isArray(rows) ? rows : []).filter((row) => {
+    const current = String(row?.metrics?.['project.next_steps'] || '').trim();
+    return !current && String(row?.task_id || '').trim();
+  });
+  if (!targets.length) return;
+
+  const concurrency = 4;
+  let idx = 0;
+  async function worker() {
+    while (idx < targets.length) {
+      const currentIdx = idx;
+      idx += 1;
+      const row = targets[currentIdx];
+      try {
+        const latestComment = await fetchLatestTaskComment(row.task_id);
+        if (latestComment) {
+          row.metrics = row.metrics || {};
+          row.metrics['project.next_steps'] = latestComment;
+        }
+      } catch (_) {
+        // Ignore per-task failures; keep refresh running for other rows.
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, () => worker()));
 }
 
 async function updateCustomField(taskId, fieldId, value) {

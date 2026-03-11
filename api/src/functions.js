@@ -835,7 +835,7 @@ app.http('projects', {
         return json(401, { error: 'unauthorized' });
       }
       const refresh = ['1', 'true', 'yes'].includes(String(req.query.get('refresh') || '').trim().toLowerCase());
-      const rows = await fetchListRows({ force: refresh });
+      const rows = await fetchListRows({ force: refresh, includeComments: refresh });
       const projects = rows.map((r) => ({
         sf_id: r.sf_id,
         task_name: r.task_name,
