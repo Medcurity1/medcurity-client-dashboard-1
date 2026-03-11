@@ -54,6 +54,7 @@
       const sig = qp.get('sig') || '';
       let projects = [];
       const DEFAULT_EXCLUDED_STATUSES = new Set(['completed', 'in progress']);
+      let workMonthFilterInitialized = false;
 
       function esc(v) {
         return String(v || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
@@ -100,9 +101,38 @@
         });
       }
 
-      function buildWorkMonthFilter(values) {
+      function buildWorkMonthFilter(values, selectedSet = null) {
         const host = document.getElementById('workMonthFilter');
         host.innerHTML = values.map((v) => `<label class="status-filter-option"><input type="checkbox" value="${esc(v)}" onchange="renderTable()" checked /><span>${esc(v)}</span></label>`).join('');
+        const boxes = Array.from(document.querySelectorAll('#workMonthFilter input[type="checkbox"]'));
+        if (selectedSet && selectedSet.size) {
+          boxes.forEach((x) => { x.checked = selectedSet.has(norm(x.value)); });
+        } else {
+          boxes.forEach((x) => { x.checked = true; });
+        }
+      }
+
+      function refreshWorkMonthOptions(baseRows) {
+        const existingSelected = new Set(selectedWorkMonths());
+        const options = [...new Set(
+          (Array.isArray(baseRows) ? baseRows : [])
+            .map((p) => p._workMonthLabel || p.primary_work_month || 'Not Set')
+            .filter(Boolean)
+        )].sort((a, b) => {
+          if (a === 'Not Set') return 1;
+          if (b === 'Not Set') return -1;
+          return a.localeCompare(b);
+        });
+        const selectedForOptions = new Set(
+          options
+            .map((v) => norm(v))
+            .filter((v) => {
+              if (!workMonthFilterInitialized) return true;
+              return existingSelected.has(v);
+            })
+        );
+        buildWorkMonthFilter(options, selectedForOptions);
+        workMonthFilterInitialized = true;
       }
 
       function togglePanel(id) {
@@ -139,10 +169,14 @@
       function renderTable() {
         const q = String((document.getElementById('projectSearch') || {}).value || '').trim().toLowerCase();
         const statuses = selectedStatuses();
-        const workMonths = selectedWorkMonths();
-        const filtered = projects.filter((p) => {
+        const bySearchAndStatus = projects.filter((p) => {
           if (!String(`${p.task_name} ${p.sf_id}`).toLowerCase().includes(q)) return false;
           if (statuses.length && !statuses.includes(norm(p._statusLabel || p.task_status))) return false;
+          return true;
+        });
+        refreshWorkMonthOptions(bySearchAndStatus);
+        const workMonths = selectedWorkMonths();
+        const filtered = bySearchAndStatus.filter((p) => {
           if (workMonths.length && !workMonths.includes(norm(p._workMonthLabel || p.primary_work_month || 'Not Set'))) return false;
           return true;
         });
@@ -213,6 +247,7 @@
         });
         buildStatusFilter(statusOptions);
         buildWorkMonthFilter(workMonthOptions);
+        workMonthFilterInitialized = false;
         renderTable();
       }
 
