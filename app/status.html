@@ -695,13 +695,20 @@
             .join('');
         }
 
-        const taskUrl = data.task_url ? `<p><a href="${esc(data.task_url)}" target="_blank" rel="noreferrer">Open task in ClickUp</a></p>` : '';
-        document.getElementById('meta').innerHTML = `
-          <p>SF ID: ${esc(data.sf_id)}</p>
-          <p>Last updated in ClickUp: ${esc(data.source_updated_at || 'Unknown')}</p>
-          <p>Last synced to dashboard: ${esc(data.synced_at || 'Unknown')}</p>
-          ${taskUrl}
-        `;
+        const meta = document.getElementById('meta');
+        if (hasAdminAccess) {
+          const taskUrl = data.task_url ? `<p><a href="${esc(data.task_url)}" target="_blank" rel="noreferrer">Open task in ClickUp</a></p>` : '';
+          meta.innerHTML = `
+            <p>SF ID: ${esc(data.sf_id)}</p>
+            <p>Last updated in ClickUp: ${esc(data.source_updated_at || 'Unknown')}</p>
+            <p>Last synced to dashboard: ${esc(data.synced_at || 'Unknown')}</p>
+            ${taskUrl}
+          `;
+          meta.style.display = '';
+        } else {
+          meta.innerHTML = '';
+          meta.style.display = 'none';
+        }
       }
 
       document.addEventListener('click', (evt) => {
