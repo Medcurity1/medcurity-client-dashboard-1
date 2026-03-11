@@ -216,10 +216,6 @@
       }
 
       async function init() {
-        if (isClientHost) {
-          document.body.innerHTML = `<main class="page"><section class="panel"><h2>Not available on client domain</h2><p>Use staging for admin pages.</p></section></main>`;
-          return;
-        }
         const keyQ = key ? `?key=${encodeURIComponent(key)}` : '';
         document.getElementById('projectsLink').href = `/admin/projects${keyQ}`;
         document.getElementById('metricsLink').href = `/admin/metrics${keyQ}`;
