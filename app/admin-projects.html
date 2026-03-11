@@ -96,10 +96,11 @@
       }
       function displayStatus(v) {
         return String(v || '')
+          .replace(/[_-]+/g, ' ')
           .split(' ')
           .filter(Boolean)
           .map((s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())
-          .join(' ');
+          .join(' ') || 'Unknown';
       }
 
       function parseUS(value) {
@@ -130,8 +131,8 @@
 
       function normalizeProjects(raw) {
         const normalized = raw.map((p) => {
-          const status = String(p.task_status || '');
-          const isCompleted = norm(status) === 'completed';
+          const statusLabel = displayStatus(p.task_status || 'Unknown');
+          const isCompleted = norm(statusLabel) === 'completed';
 
           const created = parseUS(p.task_created_at);
           const closed = parseUS(p.task_closed_at);
@@ -147,6 +148,8 @@
           return {
             ...p,
             _isCompleted: isCompleted,
+            _statusLabel: statusLabel,
+            _statusNorm: norm(statusLabel),
             _periodLabel: quarterLabel(anchor),
             _startLabel: isCompleted ? '-' : (created ? formatUS(created) : 'Unknown'),
             _completedLabel: isCompleted ? (anchor ? formatUS(anchor) : 'Unknown') : '-',
@@ -238,7 +241,7 @@
       function buildSummary(hostId, rows) {
         const counts = {};
         rows.forEach((row) => {
-          const s = displayStatus(row.task_status || 'Unknown');
+          const s = row._statusLabel || displayStatus(row.task_status || 'Unknown');
           counts[s] = (counts[s] || 0) + 1;
         });
         const host = document.getElementById(hostId);
@@ -272,7 +275,7 @@
               <td>${esc(p.sf_id)}</td>
               <td>${esc(p.project_lead || 'Not assigned')}</td>
               <td>${esc(p.project_support || '-')}</td>
-              <td>${esc(displayStatus(p.task_status || ''))}</td>
+              <td>${esc(p._statusLabel || displayStatus(p.task_status || ''))}</td>
               <td>${esc(p._startLabel || '-')}</td>
               <td>${esc(p._completedLabel || '-')}</td>
             </tr>`;
@@ -304,7 +307,7 @@
         const filtered = projects.filter((p) => {
           const text = norm(`${p.task_name} ${p.sf_id}`);
           if (query && !text.includes(query)) return false;
-          if (statuses.length && !statuses.includes(norm(p.task_status))) return false;
+          if (statuses.length && !statuses.includes(p._statusNorm || norm(p.task_status))) return false;
           if (leads.length && !leads.includes(norm(p.project_lead))) return false;
           return true;
         });
@@ -361,7 +364,7 @@
         projects = normalizeProjects(data.projects || []);
         document.getElementById('countLabel').textContent = `${projects.length} clients`;
 
-        const allStatuses = [...new Set(projects.map((p) => p.task_status).filter(Boolean))].sort();
+        const allStatuses = [...new Set(projects.map((p) => p._statusLabel).filter(Boolean))].sort();
         const allLeads = [...new Set(projects.map((p) => p.project_lead).filter(Boolean))].sort();
         buildFilterOptions('statusFilter', allStatuses);
         buildFilterOptions('leadFilter', allLeads);

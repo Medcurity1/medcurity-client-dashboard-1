@@ -16,6 +16,17 @@
       <section class="panel">
         <div class="admin-controls">
           <input id="projectSearch" class="project-search" type="search" placeholder="Search by client name or SF ID..." oninput="renderTable()" />
+          <div class="status-multiselect" id="statusFilterControl">
+            <button type="button" id="statusFilterToggle" class="project-filter status-toggle" onclick="togglePanel('statusFilterPanel')">Statuses</button>
+            <div id="statusFilterPanel" class="status-filter-panel" hidden>
+              <div id="statusFilter" class="status-filter-list"></div>
+              <div class="status-filter-actions">
+                <button type="button" class="status-action-btn" onclick="clearStatusFilter()">Clear</button>
+                <button type="button" class="status-action-btn" onclick="selectAllStatuses()">All</button>
+                <button type="button" class="status-action-btn primary" onclick="closePanel('statusFilterPanel')">Done</button>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -31,15 +42,74 @@
       const lead = qp.get('lead') || '';
       const sig = qp.get('sig') || '';
       let projects = [];
+      const DEFAULT_EXCLUDED_STATUSES = new Set(['completed', 'in progress']);
 
       function esc(v) {
         return String(v || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
       }
 
+      function norm(v) {
+        return String(v || '').trim().toLowerCase();
+      }
+
+      function displayStatus(v) {
+        return String(v || '')
+          .replace(/[_-]+/g, ' ')
+          .split(' ')
+          .filter(Boolean)
+          .map((s) => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase())
+          .join(' ') || 'Unknown';
+      }
+
+      function selectedStatuses() {
+        return Array.from(document.querySelectorAll('#statusFilter input[type="checkbox"]:checked')).map((x) => norm(x.value));
+      }
+
+      function updateStatusToggleLabel(values) {
+        const btn = document.getElementById('statusFilterToggle');
+        if (!btn) return;
+        btn.textContent = values.length ? `${values.length} selected` : 'Statuses';
+      }
+
+      function buildStatusFilter(values) {
+        const host = document.getElementById('statusFilter');
+        host.innerHTML = values.map((v) => `<label class="status-filter-option"><input type="checkbox" value="${esc(v)}" onchange="renderTable()" /><span>${esc(v)}</span></label>`).join('');
+        document.querySelectorAll('#statusFilter input[type="checkbox"]').forEach((x) => {
+          x.checked = !DEFAULT_EXCLUDED_STATUSES.has(norm(x.value));
+        });
+      }
+
+      function togglePanel(id) {
+        const panel = document.getElementById(id);
+        if (!panel) return;
+        panel.hidden = !panel.hidden;
+      }
+
+      function closePanel(id) {
+        const panel = document.getElementById(id);
+        if (panel) panel.hidden = true;
+      }
+
+      function clearStatusFilter() {
+        document.querySelectorAll('#statusFilter input[type="checkbox"]').forEach((x) => { x.checked = false; });
+        renderTable();
+      }
+
+      function selectAllStatuses() {
+        document.querySelectorAll('#statusFilter input[type="checkbox"]').forEach((x) => { x.checked = true; });
+        renderTable();
+      }
+
       function renderTable() {
         const q = String((document.getElementById('projectSearch') || {}).value || '').trim().toLowerCase();
-        const filtered = projects.filter((p) => String(`${p.task_name} ${p.sf_id}`).toLowerCase().includes(q));
+        const statuses = selectedStatuses();
+        const filtered = projects.filter((p) => {
+          if (!String(`${p.task_name} ${p.sf_id}`).toLowerCase().includes(q)) return false;
+          if (statuses.length && !statuses.includes(norm(p._statusLabel || p.task_status))) return false;
+          return true;
+        });
         document.getElementById('countLabel').textContent = `${filtered.length} projects`;
+        updateStatusToggleLabel(statuses);
 
         if (!filtered.length) {
           document.getElementById('tableHost').innerHTML = '<p class="admin-empty">No projects found.</p>';
@@ -52,7 +122,7 @@
             <td><a href="${href}">${esc(p.task_name)}</a></td>
             <td>${esc(p.sf_id)}</td>
             <td>${esc(p.project_lead || 'Not assigned')}</td>
-            <td>${esc(p.task_status || '')}</td>
+            <td>${esc(p._statusLabel || p.task_status || '')}</td>
             <td>${esc(p.source_updated_at || '')}</td>
           </tr>`;
         }).join('');
@@ -89,12 +159,24 @@
         }
         const name = String(data.assessor_name || 'Assessor').trim();
         document.getElementById('title').textContent = `${name} - Project Dashboard`;
-        projects = Array.isArray(data.projects) ? data.projects : [];
+        projects = (Array.isArray(data.projects) ? data.projects : []).map((p) => ({
+          ...p,
+          _statusLabel: displayStatus(p.task_status || 'Unknown'),
+        }));
+        const statusOptions = [...new Set(projects.map((p) => p._statusLabel).filter(Boolean))].sort();
+        buildStatusFilter(statusOptions);
         renderTable();
       }
 
       init().catch((err) => {
         document.body.innerHTML = `<main class="page"><section class="panel"><h2>Load failed</h2><p>${esc(err.message || err)}</p></section></main>`;
+      });
+
+      document.addEventListener('click', (evt) => {
+        const box = document.getElementById('statusFilterControl');
+        if (!box || box.contains(evt.target)) return;
+        const panel = document.getElementById('statusFilterPanel');
+        if (panel) panel.hidden = true;
       });
     </script>
   </body>
