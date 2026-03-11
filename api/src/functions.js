@@ -30,12 +30,35 @@ function normalizeWorkMonth(value) {
   const mUs = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (mUs) {
     const dt = new Date(Number(mUs[3]), Number(mUs[1]) - 1, Number(mUs[2]));
-    return dt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    return dt.toLocaleString('en-US', { month: 'long' });
   }
   const mIso = raw.match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
   if (mIso) {
     const dt = new Date(Number(mIso[1]), Number(mIso[2]) - 1, 1);
-    return dt.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    return dt.toLocaleString('en-US', { month: 'long' });
+  }
+  const fromDateCtor = new Date(raw);
+  if (!Number.isNaN(fromDateCtor.getTime())) {
+    return fromDateCtor.toLocaleString('en-US', { month: 'long' });
+  }
+  const mMonthYear = raw.match(/^([A-Za-z]+)\s*[-,\/]?\s*(\d{4})$/);
+  if (mMonthYear) {
+    const month = mMonthYear[1].toLowerCase();
+    const monthMap = {
+      jan: 'January', january: 'January',
+      feb: 'February', february: 'February',
+      mar: 'March', march: 'March',
+      apr: 'April', april: 'April',
+      may: 'May',
+      jun: 'June', june: 'June',
+      jul: 'July', july: 'July',
+      aug: 'August', august: 'August',
+      sep: 'September', sept: 'September', september: 'September',
+      oct: 'October', october: 'October',
+      nov: 'November', november: 'November',
+      dec: 'December', december: 'December',
+    };
+    if (monthMap[month]) return monthMap[month];
   }
   return raw;
 }
@@ -896,8 +919,8 @@ app.http('assessorProjects', {
           primary_work_month: normalizeWorkMonth(
             getMetric(
               r.metrics || {},
-              'project.primary_work_month',
               'project.month_year',
+              'project.primary_work_month',
               'project.work_month'
             )
           ),
