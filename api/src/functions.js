@@ -871,10 +871,13 @@ app.http('status', {
   route: 'status',
   handler: async (req, ctx) => {
     try {
+      const queryObj = Object.fromEntries(req.query.entries());
       const sfId = String(req.query.get('sf_id') || req.query.get('sfId') || '').trim();
       const sig = String(req.query.get('sig') || '').trim();
       if (!sfId || sig !== sign(sfId)) return json(403, { error: 'forbidden' });
-      const rows = await fetchListRows();
+      const wantsFresh = ['1', 'true', 'yes'].includes(String(req.query.get('fresh') || '').trim().toLowerCase());
+      const adminRequest = isAdmin({ query: queryObj, headers: req.headers });
+      const rows = await fetchListRows({ force: wantsFresh && adminRequest });
       const row = rows.find((r) => r.sf_id === sfId);
       if (!row) return json(404, { error: 'not_found' });
       return json(200, { ...row, dashboard: buildDashboard(row) });
@@ -1456,6 +1459,13 @@ app.http('update', {
           local_only: !fieldId && isEcdMetric,
         },
       }).catch(() => {});
+
+      // Keep client/admin views in sync immediately after edit.
+      try {
+        await fetchListRows({ force: true });
+      } catch (_) {
+        // Update to ClickUp already succeeded; do not fail the request for cache refresh issues.
+      }
 
       return json(200, { ok: true, local_only: !fieldId && isEcdMetric });
     } catch (err) {
