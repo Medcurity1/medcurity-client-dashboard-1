@@ -140,10 +140,21 @@ function resolveAssessorAccessFromLead(lead, sig) {
 function leadMatches(projectLead, allowedLeads) {
   const project = normalizeLead(projectLead);
   if (!project) return false;
+  const projectTokens = project.split(' ').filter(Boolean);
+  const projectTokenSet = new Set(projectTokens);
   return allowedLeads.some((lead) => {
     const target = normalizeLead(lead);
     if (!target) return false;
-    return project === target || project.includes(target);
+    if (project === target) return true;
+
+    const targetTokens = target.split(' ').filter(Boolean);
+    if (!targetTokens.length) return false;
+    if (targetTokens.length === 1) {
+      // Single-name lookups (e.g. "Dan") must match whole tokens only.
+      return projectTokenSet.has(targetTokens[0]);
+    }
+    // Multi-token names match when all name tokens are present.
+    return targetTokens.every((t) => projectTokenSet.has(t));
   });
 }
 
