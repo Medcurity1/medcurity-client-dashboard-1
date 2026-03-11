@@ -6,6 +6,14 @@ const {
 } = require('./utils');
 
 const API_BASE = 'https://api.clickup.com/api/v2';
+const LIST_CACHE_TTL_MS = 60 * 1000;
+const COMMENT_CACHE_TTL_MS = 2 * 60 * 1000;
+
+let listCacheRows = null;
+let listCacheUntil = 0;
+let listCacheInFlight = null;
+const commentCache = new Map();
+const commentInFlight = new Map();
 
 async function fetchJson(path, init = {}) {
   const token = required('CLICKUP_API_TOKEN');
@@ -93,7 +101,13 @@ function pickBestBySf(rows) {
   return Array.from(bySf.values());
 }
 
-async function fetchListRows() {
+async function fetchListRows(options = {}) {
+  const force = !!options.force;
+  const now = Date.now();
+  if (!force && listCacheRows && now < listCacheUntil) return listCacheRows;
+  if (!force && listCacheInFlight) return listCacheInFlight;
+
+  const run = (async () => {
   const listId = required('CLICKUP_LIST_ID');
   const all = [];
   let page = 0;
@@ -107,7 +121,18 @@ async function fetchListRows() {
     if (tasks.length < 100) break;
     page += 1;
   }
-  return pickBestBySf(all);
+    const rows = pickBestBySf(all);
+    listCacheRows = rows;
+    listCacheUntil = Date.now() + LIST_CACHE_TTL_MS;
+    return rows;
+  })();
+
+  listCacheInFlight = run;
+  try {
+    return await run;
+  } finally {
+    listCacheInFlight = null;
+  }
 }
 
 async function updateCustomField(taskId, fieldId, value) {
@@ -118,13 +143,34 @@ async function updateCustomField(taskId, fieldId, value) {
 }
 
 async function fetchLatestTaskComment(taskId) {
+  const key = String(taskId || '').trim();
+  if (!key) return '';
+  const cached = commentCache.get(key);
+  const now = Date.now();
+  if (cached && now < cached.until) return cached.value;
+  if (commentInFlight.has(key)) return commentInFlight.get(key);
+
+  const run = (async () => {
   const data = await fetchJson(`/task/${taskId}/comment`);
   const comments = Array.isArray(data.comments) ? data.comments : [];
-  if (!comments.length) return '';
+    if (!comments.length) {
+      commentCache.set(key, { value: '', until: Date.now() + COMMENT_CACHE_TTL_MS });
+      return '';
+    }
 
   comments.sort((a, b) => Number(b.date || 0) - Number(a.date || 0));
   const latest = comments[0] || {};
-  return String(latest.comment_text || '').trim();
+    const text = String(latest.comment_text || '').trim();
+    commentCache.set(key, { value: text, until: Date.now() + COMMENT_CACHE_TTL_MS });
+    return text;
+  })();
+
+  commentInFlight.set(key, run);
+  try {
+    return await run;
+  } finally {
+    commentInFlight.delete(key);
+  }
 }
 
 module.exports = {

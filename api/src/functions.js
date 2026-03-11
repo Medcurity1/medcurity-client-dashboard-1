@@ -746,13 +746,22 @@ app.http('status', {
       const row = rows.find((r) => r.sf_id === sfId);
       if (!row) return json(404, { error: 'not_found' });
       try {
-        const latestComment = await fetchLatestTaskComment(row.task_id);
-        if (latestComment) {
-          row.metrics = row.metrics || {};
-          row.metrics['project.next_steps'] = latestComment;
+        const currentNextSteps = String(row.metrics?.['project.next_steps'] || '').trim();
+        if (!currentNextSteps) {
+          const latestComment = await fetchLatestTaskComment(row.task_id);
+          if (latestComment) {
+            row.metrics = row.metrics || {};
+            row.metrics['project.next_steps'] = latestComment;
+          }
         }
       } catch (_) {
         // Ignore comment-fetch failures and fall back to existing mapped field value.
+      }
+      try {
+        // Warm list cache periodically in background on status traffic.
+        fetchListRows().catch(() => {});
+      } catch (_) {
+        // no-op
       }
       return json(200, { ...row, dashboard: buildDashboard(row) });
     } catch (err) {
