@@ -242,6 +242,33 @@ async function getCachedClickupRows() {
   };
 }
 
+async function getCachedClickupRow(sfId) {
+  const pool = await getPool();
+  if (!pool) return null;
+  const key = String(sfId || '').trim();
+  if (!key) return null;
+  const result = await pool
+    .request()
+    .input('sf_id', key)
+    .query(`
+      SELECT TOP 1 row_json, synced_at
+      FROM dbo.clickup_rows
+      WHERE sf_id = @sf_id
+    `);
+  const rec = (result.recordset || [])[0];
+  if (!rec) return null;
+  try {
+    const row = JSON.parse(String(rec.row_json || '{}'));
+    if (!row || typeof row !== 'object') return null;
+    return {
+      row,
+      syncedAt: rec.synced_at || null,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 async function replaceCachedClickupRows(rows) {
   const pool = await getPool();
   if (!pool) return false;
@@ -276,5 +303,6 @@ module.exports = {
   upsertClientLink,
   storageHealth,
   getCachedClickupRows,
+  getCachedClickupRow,
   replaceCachedClickupRows,
 };

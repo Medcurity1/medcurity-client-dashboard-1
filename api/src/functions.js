@@ -8,6 +8,7 @@ const {
   recordAuditEvent,
   upsertClientLink,
   storageHealth,
+  getCachedClickupRow,
 } = require('../shared/dashboardStore');
 const fs = require('fs');
 const path = require('path');
@@ -879,8 +880,28 @@ app.http('status', {
       if (!sfId || sig !== sign(sfId)) return json(403, { error: 'forbidden' });
       const wantsFresh = ['1', 'true', 'yes'].includes(String(req.query.get('fresh') || '').trim().toLowerCase());
       const adminRequest = isAdmin({ query: queryObj, headers: req.headers });
-      const rows = await fetchListRows({ force: wantsFresh && adminRequest });
-      const row = rows.find((r) => r.sf_id === sfId);
+      let row = null;
+
+      // Fast path for client links: single-row SQL snapshot lookup.
+      if (!(wantsFresh && adminRequest) && hasSqlConfig()) {
+        try {
+          const cached = await getCachedClickupRow(sfId);
+          if (cached && cached.row) {
+            row = cached.row;
+            if (!row.synced_at && cached.syncedAt) {
+              row.synced_at = String(cached.syncedAt);
+            }
+          }
+        } catch (_) {
+          // Fall back to list fetch below.
+        }
+      }
+
+      if (!row) {
+        const rows = await fetchListRows({ force: wantsFresh && adminRequest });
+        row = rows.find((r) => r.sf_id === sfId) || null;
+      }
+
       if (!row) return json(404, { error: 'not_found' });
       return json(200, { ...row, dashboard: buildDashboard(row) });
     } catch (err) {
