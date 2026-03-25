@@ -55,6 +55,7 @@
       let projects = [];
       const DEFAULT_EXCLUDED_STATUSES = new Set(['completed', 'in progress']);
       let workMonthFilterInitialized = false;
+      const workMonthSelectionState = {};
 
       function esc(v) {
         return String(v || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
@@ -116,7 +117,10 @@
       }
 
       function selectedWorkMonths() {
-        return Array.from(document.querySelectorAll('#workMonthFilter input[type="checkbox"]:checked')).map((x) => norm(x.value));
+        const checked = Array.from(document.querySelectorAll('#workMonthFilter input[type="checkbox"]:checked')).map((x) => norm(x.value));
+        checked.forEach((k) => { workMonthSelectionState[k] = true; });
+        Array.from(document.querySelectorAll('#workMonthFilter input[type="checkbox"]:not(:checked)')).forEach((x) => { workMonthSelectionState[norm(x.value)] = false; });
+        return checked;
       }
 
       function updateWorkMonthToggleLabel(values) {
@@ -139,14 +143,23 @@
         const boxes = Array.from(document.querySelectorAll('#workMonthFilter input[type="checkbox"]'));
         if (selectedSet !== null) {
           // Preserve exact checked state, including "none selected".
-          boxes.forEach((x) => { x.checked = selectedSet.has(norm(x.value)); });
+          boxes.forEach((x) => {
+            const k = norm(x.value);
+            const checked = selectedSet.has(k);
+            x.checked = checked;
+            workMonthSelectionState[k] = checked;
+          });
         } else {
-          boxes.forEach((x) => { x.checked = true; });
+          boxes.forEach((x) => {
+            const k = norm(x.value);
+            x.checked = true;
+            workMonthSelectionState[k] = true;
+          });
         }
       }
 
       function refreshWorkMonthOptions(baseRows) {
-        const existingSelected = new Set(selectedWorkMonths());
+        selectedWorkMonths();
         const options = [...new Set(
           (Array.isArray(baseRows) ? baseRows : [])
             .map((p) => p._workMonthLabel || p.primary_work_month || 'Not Set')
@@ -156,11 +169,11 @@
         if (!workMonthFilterInitialized) {
           selectedForOptions = new Set(options.map((v) => norm(v)));
         } else {
-          // Keep exactly what user currently selected.
+          // Preserve historical selection state even when options temporarily disappear.
           selectedForOptions = new Set(
             options
               .map((v) => norm(v))
-              .filter((v) => existingSelected.has(v))
+              .filter((v) => workMonthSelectionState[v] !== false)
           );
         }
         buildWorkMonthFilter(options, selectedForOptions);
@@ -189,12 +202,20 @@
       }
 
       function clearWorkMonthFilter() {
-        document.querySelectorAll('#workMonthFilter input[type="checkbox"]').forEach((x) => { x.checked = false; });
+        document.querySelectorAll('#workMonthFilter input[type="checkbox"]').forEach((x) => {
+          const k = norm(x.value);
+          x.checked = false;
+          workMonthSelectionState[k] = false;
+        });
         renderTable();
       }
 
       function selectAllWorkMonths() {
-        document.querySelectorAll('#workMonthFilter input[type="checkbox"]').forEach((x) => { x.checked = true; });
+        document.querySelectorAll('#workMonthFilter input[type="checkbox"]').forEach((x) => {
+          const k = norm(x.value);
+          x.checked = true;
+          workMonthSelectionState[k] = true;
+        });
         renderTable();
       }
 
