@@ -52,10 +52,12 @@
       const token = qp.get('token') || '';
       const lead = qp.get('lead') || '';
       const sig = qp.get('sig') || '';
+      const FILTER_KEY = `medcurity_assessor_filters_v3:${token || lead || 'default'}`;
       let projects = [];
       const DEFAULT_EXCLUDED_STATUSES = new Set(['completed', 'in progress']);
       let workMonthFilterInitialized = false;
       const workMonthSelectionState = {};
+      const statusSelectionState = {};
 
       function esc(v) {
         return String(v || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
@@ -133,7 +135,13 @@
         const host = document.getElementById('statusFilter');
         host.innerHTML = values.map((v) => `<label class="status-filter-option"><input type="checkbox" value="${esc(v)}" onchange="renderTable()" /><span>${esc(v)}</span></label>`).join('');
         document.querySelectorAll('#statusFilter input[type="checkbox"]').forEach((x) => {
-          x.checked = !DEFAULT_EXCLUDED_STATUSES.has(norm(x.value));
+          const k = norm(x.value);
+          if (Object.prototype.hasOwnProperty.call(statusSelectionState, k)) {
+            x.checked = !!statusSelectionState[k];
+          } else {
+            x.checked = !DEFAULT_EXCLUDED_STATUSES.has(k);
+            statusSelectionState[k] = x.checked;
+          }
         });
       }
 
@@ -192,12 +200,20 @@
       }
 
       function clearStatusFilter() {
-        document.querySelectorAll('#statusFilter input[type="checkbox"]').forEach((x) => { x.checked = false; });
+        document.querySelectorAll('#statusFilter input[type="checkbox"]').forEach((x) => {
+          const k = norm(x.value);
+          x.checked = false;
+          statusSelectionState[k] = false;
+        });
         renderTable();
       }
 
       function selectAllStatuses() {
-        document.querySelectorAll('#statusFilter input[type="checkbox"]').forEach((x) => { x.checked = true; });
+        document.querySelectorAll('#statusFilter input[type="checkbox"]').forEach((x) => {
+          const k = norm(x.value);
+          x.checked = true;
+          statusSelectionState[k] = true;
+        });
         renderTable();
       }
 
@@ -222,6 +238,8 @@
       function renderTable() {
         const q = String((document.getElementById('projectSearch') || {}).value || '').trim().toLowerCase();
         const statuses = selectedStatuses();
+        statuses.forEach((k) => { statusSelectionState[k] = true; });
+        Array.from(document.querySelectorAll('#statusFilter input[type="checkbox"]:not(:checked)')).forEach((x) => { statusSelectionState[norm(x.value)] = false; });
         const bySearchAndStatus = projects.filter((p) => {
           if (!String(`${p.task_name} ${p.sf_id}`).toLowerCase().includes(q)) return false;
           if (statuses.length && !statuses.includes(norm(p._statusLabel || p.task_status))) return false;
@@ -236,6 +254,7 @@
         document.getElementById('countLabel').textContent = `${filtered.length} projects`;
         updateStatusToggleLabel(statuses);
         updateWorkMonthToggleLabel(workMonths);
+        saveFilterState();
 
         if (!filtered.length) {
           document.getElementById('tableHost').innerHTML = '<p class="admin-empty">No projects found.</p>';
@@ -271,6 +290,28 @@
         `;
       }
 
+      function saveFilterState() {
+        try {
+          const payload = {
+            search: String((document.getElementById('projectSearch') || {}).value || ''),
+            status_selected: selectedStatuses(),
+            month_selected: selectedWorkMonths(),
+          };
+          localStorage.setItem(FILTER_KEY, JSON.stringify(payload));
+        } catch (_) {}
+      }
+
+      function loadFilterState() {
+        try {
+          const raw = localStorage.getItem(FILTER_KEY);
+          if (!raw) return null;
+          const parsed = JSON.parse(raw);
+          return parsed && typeof parsed === 'object' ? parsed : null;
+        } catch (_) {
+          return null;
+        }
+      }
+
       async function init() {
         if (!token && !(lead && sig)) {
           document.body.innerHTML = '<main class="page"><section class="panel"><h2>Access denied</h2><p>Missing assessor access parameters.</p></section></main>';
@@ -292,6 +333,16 @@
           _statusLabel: displayStatus(p.task_status || 'Unknown'),
           _workMonthLabel: String(p.primary_work_month || 'Not Set').trim() || 'Not Set',
         }));
+        const saved = loadFilterState();
+        if (saved && typeof saved.search === 'string') {
+          document.getElementById('projectSearch').value = saved.search;
+        }
+        if (saved && Array.isArray(saved.status_selected)) {
+          saved.status_selected.forEach((v) => { statusSelectionState[norm(v)] = true; });
+        }
+        if (saved && Array.isArray(saved.month_selected)) {
+          saved.month_selected.forEach((v) => { workMonthSelectionState[norm(v)] = true; });
+        }
         const statusOptions = [...new Set(projects.map((p) => p._statusLabel).filter(Boolean))].sort();
         const workMonthOptions = [...new Set(projects.map((p) => p._workMonthLabel).filter(Boolean))].sort((a, b) => {
           return sortWorkMonths(a, b);
