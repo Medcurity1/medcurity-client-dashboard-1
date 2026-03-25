@@ -137,7 +137,8 @@
         const host = document.getElementById('workMonthFilter');
         host.innerHTML = values.map((v) => `<label class="status-filter-option"><input type="checkbox" value="${esc(v)}" onchange="renderTable()" checked /><span>${esc(v)}</span></label>`).join('');
         const boxes = Array.from(document.querySelectorAll('#workMonthFilter input[type="checkbox"]'));
-        if (selectedSet && selectedSet.size) {
+        if (selectedSet !== null) {
+          // Preserve exact checked state, including "none selected".
           boxes.forEach((x) => { x.checked = selectedSet.has(norm(x.value)); });
         } else {
           boxes.forEach((x) => { x.checked = true; });
@@ -151,14 +152,17 @@
             .map((p) => p._workMonthLabel || p.primary_work_month || 'Not Set')
             .filter(Boolean)
         )].sort(sortWorkMonths);
-        const selectedForOptions = new Set(
-          options
-            .map((v) => norm(v))
-            .filter((v) => {
-              if (!workMonthFilterInitialized) return true;
-              return existingSelected.has(v);
-            })
-        );
+        let selectedForOptions = null;
+        if (!workMonthFilterInitialized) {
+          selectedForOptions = new Set(options.map((v) => norm(v)));
+        } else {
+          // Keep exactly what user currently selected.
+          selectedForOptions = new Set(
+            options
+              .map((v) => norm(v))
+              .filter((v) => existingSelected.has(v))
+          );
+        }
         buildWorkMonthFilter(options, selectedForOptions);
         workMonthFilterInitialized = true;
       }
