@@ -59,6 +59,7 @@
       const allowLocalOverrideFallback = isLocalHost;
       let overridesBackend = 'none';
       let currentDashboard = null;
+      let currentEcdOverrides = {};
 
       function esc(value) {
         return String(value || '').replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
@@ -98,6 +99,20 @@
         try {
           localStorage.setItem(overrideStorageKey(), JSON.stringify(overrides || {}));
         } catch (_) {}
+      }
+
+      function cloneOverrideMap(source) {
+        return JSON.parse(JSON.stringify(source && typeof source === 'object' ? source : {}));
+      }
+
+      function getActiveOverrides() {
+        if (Object.keys(currentEcdOverrides || {}).length) return cloneOverrideMap(currentEcdOverrides);
+        return allowLocalOverrideFallback ? cloneOverrideMap(loadEcdOverrides()) : {};
+      }
+
+      function setActiveOverrides(overrides) {
+        currentEcdOverrides = cloneOverrideMap(overrides);
+        if (allowLocalOverrideFallback) saveEcdOverrides(currentEcdOverrides);
       }
 
       async function fetchServerEcdOverrides() {
@@ -457,7 +472,7 @@
         const row = form ? form.querySelector('.date-inline') : null;
         if (!form || !row) return;
         try {
-          const overrides = loadEcdOverrides();
+          const overrides = getActiveOverrides();
           if (adjustFollowing) {
             clearFollowingEcdOverridesFromDom(form, overrides);
             if (currentDashboard) clearFollowingEcdOverrides(currentDashboard, form.dataset.metricKey || '', overrides);
@@ -466,7 +481,7 @@
             const fallbackSnapshot = currentDashboard ? collectFollowingEcdSnapshot(currentDashboard, form.dataset.metricKey || '') : {};
             Object.assign(overrides, fallbackSnapshot, domSnapshot);
           }
-          if (allowLocalOverrideFallback) saveEcdOverrides(overrides);
+          setActiveOverrides(overrides);
           const saved = await saveServerEcdOverrides(overrides);
           if (!saved && !allowLocalOverrideFallback) {
             throw new Error('Azure SQL override save failed.');
@@ -485,21 +500,25 @@
         const row = form ? form.querySelector('.date-inline') : null;
         if (!form || !row) return;
         try {
-          const payload = await sendUpdate(form, adjustFollowing);
-          if (payload && payload.local_only && currentDashboard) {
+          const overrides = getActiveOverrides();
+          if (currentDashboard) {
             const inputEl = form.querySelector('input[type="date"]');
             const draft = JSON.parse(JSON.stringify(currentDashboard));
+            applyStoredEcdOverrides(draft, overrides);
             const touched = collectEcdOverrideChanges(draft, form.dataset.metricKey || '', (inputEl && inputEl.value) || '', adjustFollowing);
-            const overrides = loadEcdOverrides();
             for (const [k, v] of Object.entries(touched)) {
               if (String(v || '').trim()) overrides[k] = v;
               else delete overrides[k];
             }
-            if (allowLocalOverrideFallback) saveEcdOverrides(overrides);
+            setActiveOverrides(overrides);
             const saved = await saveServerEcdOverrides(overrides);
             if (!saved && !allowLocalOverrideFallback) {
               throw new Error('Azure SQL override save failed.');
             }
+          }
+          const payload = await sendUpdate(form, adjustFollowing);
+          if (payload && payload.local_only && !currentDashboard) {
+            throw new Error('ECD override save needs dashboard context.');
           }
           location.reload();
         } catch (err) {
@@ -665,13 +684,14 @@
         const serverState = await fetchServerEcdOverrides();
         const sqlEnabled = serverState && serverState.enabled && String(serverState.backend || '').toLowerCase() === 'azure_sql';
         if (sqlEnabled) {
-          applyStoredEcdOverrides(dashboard, serverState.overrides || {});
+          currentEcdOverrides = cloneOverrideMap(serverState.overrides || {});
+          applyStoredEcdOverrides(dashboard, currentEcdOverrides);
         } else {
           if (serverState && !allowLocalOverrideFallback) {
             showInlineNotice('Azure SQL overrides are not enabled. Configure AZURE_SQL_CONNECTION_STRING.');
           }
-          const localOverrides = allowLocalOverrideFallback ? loadEcdOverrides() : {};
-          applyStoredEcdOverrides(dashboard, localOverrides);
+          currentEcdOverrides = allowLocalOverrideFallback ? cloneOverrideMap(loadEcdOverrides()) : {};
+          applyStoredEcdOverrides(dashboard, currentEcdOverrides);
         }
         const details = dashboard.project_details || {};
         document.getElementById('projectDetails').innerHTML = Object.entries(details)
