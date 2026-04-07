@@ -338,6 +338,50 @@
         return keep;
       }
 
+      function collectAcdTriggeredEcdChanges(dashboard, metricKey, ymdValue, adjustFollowing) {
+        const parts = String(metricKey || '').split('.');
+        if (parts.length !== 3) return {};
+        const sectionKey = parts[0] === 'sra' ? 'sra_steps' : parts[0] === 'nva' ? 'nva_steps' : '';
+        if (!sectionKey) return {};
+
+        const entries = Object.entries(dashboard?.[sectionKey] || {});
+        const idx = entries.findIndex(([, step]) => {
+          const metric = String(step?.acd?.metric_key || '');
+          return metric === metricKey || metric === metricKey.replace(/\.acd$/i, '.date') || metric === metricKey.replace(/\.date$/i, '.acd');
+        });
+        if (idx < 0) return {};
+
+        const target = entries[idx][1];
+        const prevUs = String(target?.acd?.value || '');
+        const nextUs = usFromYmd(ymdValue);
+        const oldDate = parseUsDate(prevUs);
+        const newDate = parseUsDate(nextUs);
+        const touched = {};
+
+        if (!adjustFollowing || !oldDate || !newDate) return touched;
+
+        const delta = diffCalendarDays(newDate, oldDate);
+        if (!delta) return touched;
+
+        for (let i = idx + 1; i < entries.length; i += 1) {
+          const step = entries[i][1];
+          const laterAcd = parseUsDate(String(step?.acd?.value || ''));
+          if (laterAcd) continue;
+
+          const ecdKey = String(step?.ecd?.metric_key || '');
+          if (!ecdKey) continue;
+
+          const currentEcd = parseUsDate(String(step?.ecd?.value || ''));
+          if (!currentEcd) continue;
+
+          const shiftedUs = formatUsDate(shiftBusinessSafe(currentEcd, delta));
+          applyEcdValue(step, shiftedUs);
+          touched[ecdKey] = shiftedUs;
+        }
+
+        return touched;
+      }
+
       function clearFollowingEcdOverrides(dashboard, acdMetricKey, overrides) {
         const parts = String(acdMetricKey || '').split('.');
         if (parts.length !== 3) return;
@@ -474,8 +518,19 @@
         try {
           const overrides = getActiveOverrides();
           if (adjustFollowing) {
-            clearFollowingEcdOverridesFromDom(form, overrides);
-            if (currentDashboard) clearFollowingEcdOverrides(currentDashboard, form.dataset.metricKey || '', overrides);
+            const inputEl = form.querySelector('input[type="date"]');
+            const draft = currentDashboard ? JSON.parse(JSON.stringify(currentDashboard)) : null;
+            if (draft) {
+              applyStoredEcdOverrides(draft, overrides);
+              const touched = collectAcdTriggeredEcdChanges(draft, form.dataset.metricKey || '', (inputEl && inputEl.value) || '', true);
+              clearFollowingEcdOverrides(draft, form.dataset.metricKey || '', overrides);
+              for (const [k, v] of Object.entries(touched)) {
+                if (String(v || '').trim()) overrides[k] = v;
+                else delete overrides[k];
+              }
+            } else {
+              clearFollowingEcdOverridesFromDom(form, overrides);
+            }
           } else {
             const domSnapshot = collectFollowingEcdSnapshotFromDom(form);
             const fallbackSnapshot = currentDashboard ? collectFollowingEcdSnapshot(currentDashboard, form.dataset.metricKey || '') : {};
