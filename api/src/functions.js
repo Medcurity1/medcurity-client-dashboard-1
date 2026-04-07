@@ -353,8 +353,7 @@ function addEcdAcdFields(stepMap, offsets) {
     else setEcdIfBlank(stepMap, 'go_onsite_have_interview', 'review_policies_and_procedures_baa', 7);
   }
 
-  setEcdIfBlank(stepMap, 'recieve_requested_follow_up_documentation', 'go_onsite_have_interview', 14);
-  setEcdIfBlank(stepMap, 'schedule_final_sra_report', 'go_onsite_have_interview', 14);
+  setEcdIfBlank(stepMap, 'recieve_requested_follow_up_documentation', 'go_onsite_have_interview', 7);
 
   const reviewName = findStepNameBySlug(stepMap, 'review_sra');
   if (reviewName) {
@@ -363,28 +362,24 @@ function addEcdAcdFields(stepMap, offsets) {
       const presentName = findStepNameBySlug(stepMap, 'present_final_sra_report');
       const presentAcd = presentName ? parseMetricDate(stepMap[presentName]?.ACD) : null;
       if (presentAcd) {
-        review.ECD = formatUSDate(shiftToFridayIfWeekend(addDays(presentAcd, -1)));
+        review.ECD = formatUSDate(shiftToFridayIfWeekend(addDays(presentAcd, -7)));
       } else {
-        const goAnchor = anchorDateForSlug(stepMap, 'go_onsite_have_interview');
-        if (goAnchor) {
-          let proposed = shiftToMondayIfWeekend(addDays(goAnchor, 15));
-          const siblings = [];
-          const receiveName = findStepNameBySlug(stepMap, 'recieve_requested_follow_up_documentation');
-          const scheduleName = findStepNameBySlug(stepMap, 'schedule_final_sra_report');
-          if (receiveName) {
-            const d = parseMetricDate(stepMap[receiveName]?.ECD);
-            if (d) siblings.push(d);
-          }
-          if (scheduleName) {
-            const d = parseMetricDate(stepMap[scheduleName]?.ECD);
-            if (d) siblings.push(d);
-          }
-          if (siblings.length) {
-            const latest = siblings.reduce((a, b) => (a > b ? a : b));
-            if (proposed <= latest) proposed = nextBusinessDay(latest);
-          }
-          review.ECD = formatUSDate(proposed);
+        const receiveAnchor = anchorDateForSlug(stepMap, 'recieve_requested_follow_up_documentation')
+          || anchorDateForSlug(stepMap, 'go_onsite_have_interview');
+        if (receiveAnchor) {
+          review.ECD = formatUSDate(shiftToMondayIfWeekend(addDays(receiveAnchor, 7)));
         }
+      }
+    }
+  }
+
+  const scheduleFinalSraName = findStepNameBySlug(stepMap, 'schedule_final_sra_report');
+  if (scheduleFinalSraName) {
+    const scheduleFinal = stepMap[scheduleFinalSraName];
+    if (!String(scheduleFinal.ECD || '').trim()) {
+      const reviewAnchor = anchorDateForSlug(stepMap, 'review_sra');
+      if (reviewAnchor) {
+        scheduleFinal.ECD = formatUSDate(reviewAnchor);
       }
     }
   }
@@ -396,20 +391,10 @@ function addEcdAcdFields(stepMap, offsets) {
       const presentAcd = parseMetricDate(present.ACD);
       if (presentAcd) present.ECD = formatUSDate(presentAcd);
       else {
-        const reviewTitle = findStepNameBySlug(stepMap, 'review_sra');
-        const reviewEcd = reviewTitle ? parseMetricDate(stepMap[reviewTitle]?.ECD) : null;
-        const reviewAcd = reviewTitle ? parseMetricDate(stepMap[reviewTitle]?.ACD) : null;
-        let reviewAnchor = reviewEcd;
-        if (reviewAcd && (!reviewEcd || reviewAcd > reviewEcd)) reviewAnchor = reviewAcd;
-        if (reviewAnchor) {
-          let candidate = shiftToMondayIfWeekend(addDays(reviewAnchor, 7));
-          const prereqSlugs = ['recieve_requested_follow_up_documentation', 'schedule_final_sra_report', 'review_sra'];
-          const prereqDates = prereqSlugs.map((s) => anchorDateForSlug(stepMap, s)).filter(Boolean);
-          if (prereqDates.length) {
-            const minAllowed = prereqDates.reduce((a, b) => (a > b ? a : b));
-            if (candidate <= minAllowed) candidate = nextBusinessDay(minAllowed);
-          }
-          present.ECD = formatUSDate(candidate);
+        const scheduleAnchor = anchorDateForSlug(stepMap, 'schedule_final_sra_report')
+          || anchorDateForSlug(stepMap, 'review_sra');
+        if (scheduleAnchor) {
+          present.ECD = formatUSDate(shiftToMondayIfWeekend(addDays(scheduleAnchor, 7)));
         }
       }
     }
